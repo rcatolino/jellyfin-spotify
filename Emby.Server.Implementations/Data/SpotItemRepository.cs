@@ -1,8 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
+using MediaBrowser.Common.Net;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Drawing;
@@ -24,6 +30,7 @@ namespace Emby.Server.Implementations.Data
     {
         private SqliteItemRepository _backend;
         private ILogger<SqliteItemRepository> _logger;
+        private HttpClient _httpClient;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="SpotItemRepository"/> class.
@@ -33,15 +40,18 @@ namespace Emby.Server.Implementations.Data
         /// <param name="logger">Instance of the <see cref="ILogger{SqliteItemRepository}"/> interface.</param>
         /// <param name="localization">Instance of the <see cref="ILocalizationManager"/> interface.</param>
         /// <param name="imageProcessor">Instance of the <see cref="IImageProcessor"/> interface.</param>
+        /// <param name="httpClientFactory">The <see cref="IHttpClientFactory"/>.</param>
         public SpotItemRepository(
             IServerConfigurationManager config,
             IServerApplicationHost appHost,
             ILogger<SqliteItemRepository> logger,
             ILocalizationManager localization,
-            IImageProcessor imageProcessor)
+            IImageProcessor imageProcessor,
+            IHttpClientFactory httpClientFactory)
         {
             _backend = new SqliteItemRepository(config, appHost, logger, localization, imageProcessor);
             _logger = logger;
+            _httpClient = httpClientFactory.CreateClient(NamedClient.Default);
         }
 
         private void LogQuery(string methodName, InternalItemsQuery query, int resultCount)
@@ -68,7 +78,41 @@ namespace Emby.Server.Implementations.Data
         /// <param name="userManager">The user manager.</param>
         public void Initialize(SqliteUserDataRepository userDataRepo, IUserManager userManager)
         {
+            SpotLogin();
             _backend.Initialize(userDataRepo, userManager);
+        }
+
+        private async void SpotLogin()
+        {
+            string tokenEP = "https://accounts.spotify.com/api/token";
+            var reqBody = new StringContent(
+                    "grant_type=client_credentials",
+                    Encoding.UTF8,
+                    "application/x-www-form-urlencoded");
+            string apiToken = "apiid:apikey";
+            string authToken = Convert.ToBase64String(Encoding.UTF8.GetBytes(apiToken));
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, tokenEP);
+            requestMessage.Content = reqBody;
+            requestMessage.Headers.Add("Authorization", "Basic " + authToken);
+            HttpResponseMessage resp = await _httpClient.SendAsync(requestMessage);
+            string body = await resp.Content.ReadAsStringAsync();
+            if (resp.StatusCode != HttpStatusCode.OK)
+            {
+                _logger.LogWarning(
+                        "Spotify login failed with code {Code} : {Text}",
+                        resp.StatusCode,
+                        body);
+            }
+            else
+            {
+                var jsonBody = JsonDocument.Parse(body);
+                _logger.LogInformation(
+                        "Spotify Login result : {Resp}",
+                        body);
+
+                var bearerToken = jsonBody.RootElement.GetProperty("access_token").GetString();
+                _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {bearerToken}");
+            }
         }
 
         /// <inheritdoc/>
@@ -113,13 +157,59 @@ namespace Emby.Server.Implementations.Data
             return _backend.GetAllArtists(query);
         }
 
+        private async Task<List<(BaseItem Item, ItemCounts ItemCounts)>> SearchArtist(string search, int limit)
+        {
+            string searchEP = $"https://api.spotify.com/v1/search?q={search}&type=artist&limit={limit}";
+            _logger.LogInformation("Searching spotify for {N} artists matching {Search}", limit, search);
+            var requestMessage = new HttpRequestMessage(HttpMethod.Get, searchEP);
+            HttpResponseMessage resp = await _httpClient.SendAsync(requestMessage);
+            string body = await resp.Content.ReadAsStringAsync();
+            if (resp.StatusCode != HttpStatusCode.OK)
+            {
+                _logger.LogWarning(
+                        "Spotify search failed with code {Code} : {Text}",
+                        resp.StatusCode,
+                        body);
+            }
+            else
+            {
+                _logger.LogInformation("Spotify artist search returned {Result}", body);
+                SpotifyData.Root? al = JsonSerializer.Deserialize<SpotifyData.Root>(body, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+                if (al is null)
+                {
+                    _logger.LogWarning("Error deserializing Spotify data {Data}", body);
+                    return new List<(BaseItem, ItemCounts)>();
+                }
+                else
+                {
+                    return al.GetItems(_logger);
+                }
+            }
+
+            return new List<(BaseItem, ItemCounts)>();
+        }
+
         /// <inheritdoc/>
         // TODO: This method sould return additional artists from spotify, up to query.Limit
         public QueryResult<(BaseItem Item, ItemCounts ItemCounts)> GetArtists(InternalItemsQuery query)
         {
             QueryResult<(BaseItem, ItemCounts)> results = _backend.GetArtists(query);
             LogQuery("GetArtists", query, results.TotalRecordCount);
-            return results;
+            if (query.SearchTerm is not null && results.TotalRecordCount < query.Limit)
+            {
+                var spotSearch = SearchArtist(
+                        query.SearchTerm,
+                        (query.Limit ?? 20) - results.TotalRecordCount);
+                var spotResults = spotSearch.GetAwaiter().GetResult();
+                return new QueryResult<(BaseItem, ItemCounts)>(results.Items.Concat(spotResults).ToList());
+            }
+            else
+            {
+                return results;
+            }
         }
 
         /// <inheritdoc/>
