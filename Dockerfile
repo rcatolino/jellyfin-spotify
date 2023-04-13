@@ -20,7 +20,7 @@ ARG DEBIAN_FRONTEND="noninteractive"
 # http://stackoverflow.com/questions/48162574/ddg#49462622
 ARG APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=DontWarn
 # https://github.com/NVIDIA/nvidia-docker/wiki/Installation-(Native-GPU-Support)
-ENV NVIDIA_DRIVER_CAPABILITIES="compute,video,utility"
+# ENV NVIDIA_DRIVER_CAPABILITIES="compute,video,utility"
 
 # https://github.com/intel/compute-runtime/releases
 ARG GMMLIB_VERSION=22.0.2
