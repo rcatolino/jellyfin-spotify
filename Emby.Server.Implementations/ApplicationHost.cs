@@ -536,7 +536,8 @@ namespace Emby.Server.Implementations
             serviceCollection.AddSingleton<IUserDataRepository, SqliteUserDataRepository>();
             serviceCollection.AddSingleton<IUserDataManager, UserDataManager>();
 
-            serviceCollection.AddSingleton<IItemRepository, SqliteItemRepository>();
+            // serviceCollection.AddSingleton<IItemRepository, SqliteItemRepository>();
+            serviceCollection.AddSingleton<IItemRepository, SpotItemRepository>();
 
             serviceCollection.AddSingleton<IMediaEncoder, MediaBrowser.MediaEncoding.Encoder.MediaEncoder>();
             serviceCollection.AddSingleton<EncodingHelper>();
@@ -635,7 +636,7 @@ namespace Emby.Server.Implementations
             SetStaticProperties();
 
             var userDataRepo = (SqliteUserDataRepository)Resolve<IUserDataRepository>();
-            ((SqliteItemRepository)Resolve<IItemRepository>()).Initialize(userDataRepo, Resolve<IUserManager>());
+            ((SpotItemRepository)Resolve<IItemRepository>()).Initialize(userDataRepo, Resolve<IUserManager>());
 
             FindParts();
         }
