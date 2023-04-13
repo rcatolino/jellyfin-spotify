@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
+using Jellyfin.Data.Enums;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Drawing;
@@ -42,6 +44,23 @@ namespace Emby.Server.Implementations.Data
             _logger = logger;
         }
 
+        private void LogQuery(string methodName, InternalItemsQuery query, int resultCount)
+        {
+            _logger.LogInformation(
+                    "{Method}: {SearchTerm} limit {Limit} type {Type} AlbumArtists {AA} Ancestor {Ancestor} Album {A} Artist {Ar} ContributingArtistIds {CAIs} ItemId {IId} -> {N} results found",
+                    methodName,
+                    query.SearchTerm,
+                    query.Limit,
+                    query.IncludeItemTypes,
+                    query.AlbumArtistIds,
+                    query.AncestorIds,
+                    query.AlbumIds,
+                    query.ArtistIds,
+                    query.ContributingArtistIds,
+                    query.ItemIds,
+                    resultCount);
+        }
+
         /// <summary>
         /// Initialize backing sqlite item repo.
         /// </summary>
@@ -77,7 +96,9 @@ namespace Emby.Server.Implementations.Data
         /// <inheritdoc/>
         public QueryResult<(BaseItem Item, ItemCounts ItemCounts)> GetAlbumArtists(InternalItemsQuery query)
         {
-            return _backend.GetAlbumArtists(query);
+            QueryResult<(BaseItem, ItemCounts)> results = _backend.GetAlbumArtists(query);
+            LogQuery("GetAlbumArtists", query, results.TotalRecordCount);
+            return results;
         }
 
         /// <inheritdoc/>
@@ -93,9 +114,12 @@ namespace Emby.Server.Implementations.Data
         }
 
         /// <inheritdoc/>
+        // TODO: This method sould return additional artists from spotify, up to query.Limit
         public QueryResult<(BaseItem Item, ItemCounts ItemCounts)> GetArtists(InternalItemsQuery query)
         {
-            return _backend.GetArtists(query);
+            QueryResult<(BaseItem, ItemCounts)> results = _backend.GetArtists(query);
+            LogQuery("GetArtists", query, results.TotalRecordCount);
+            return results;
         }
 
         /// <inheritdoc/>
@@ -131,19 +155,36 @@ namespace Emby.Server.Implementations.Data
         /// <inheritdoc/>
         public List<Guid> GetItemIdsList(InternalItemsQuery query)
         {
-            return _backend.GetItemIdsList(query);
+            List<Guid> results = _backend.GetItemIdsList(query);
+            LogQuery("GetItemIdsList", query, results.Count);
+            return results;
         }
 
         /// <inheritdoc/>
+        // TODO: we should query spotify for audio queries, up to query.Limit results
         public List<BaseItem> GetItemList(InternalItemsQuery query)
         {
-            return _backend.GetItemList(query);
+            var itemtypes = query.IncludeItemTypes;
+            List<BaseItem> results = _backend.GetItemList(query);
+            if (itemtypes.Contains(BaseItemKind.Audio) || itemtypes.Contains(BaseItemKind.MusicAlbum) || itemtypes.Contains(BaseItemKind.MusicArtist))
+            {
+                LogQuery("GetItemList", query, results.Count);
+            }
+
+            if (results.Count < query.Limit && query.IncludeItemTypes.Contains(BaseItemKind.Audio))
+            {
+                _logger.LogInformation("We should query spotify for {N} results", query.Limit - results.Count);
+            }
+
+            return results;
         }
 
         /// <inheritdoc/>
         public QueryResult<BaseItem> GetItems(InternalItemsQuery query)
         {
-            return _backend.GetItems(query);
+            QueryResult<BaseItem> results = _backend.GetItems(query);
+            LogQuery("GetItems", query, results.TotalRecordCount);
+            return results;
         }
 
         /// <inheritdoc/>
@@ -155,6 +196,7 @@ namespace Emby.Server.Implementations.Data
         /// <inheritdoc/>
         public List<MediaStream> GetMediaStreams(MediaStreamQuery query)
         {
+            _logger.LogInformation("GetMediaStreams : {SearchTerm}", query);
             return _backend.GetMediaStreams(query);
         }
 
@@ -197,6 +239,7 @@ namespace Emby.Server.Implementations.Data
         /// <inheritdoc/>
         public BaseItem RetrieveItem(Guid id)
         {
+            _logger.LogInformation("RetrieveItem: {Id}", id);
             return _backend.RetrieveItem(id);
         }
 
