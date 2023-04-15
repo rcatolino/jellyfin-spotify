@@ -19,6 +19,7 @@ using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Globalization;
 using MediaBrowser.Model.Querying;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace Emby.Server.Implementations.Data
@@ -28,6 +29,7 @@ namespace Emby.Server.Implementations.Data
     /// </summary>
     public class SpotItemRepository : IItemRepository
     {
+        private readonly IMemoryCache _memoryCache;
         private SqliteItemRepository _backend;
         private ILogger<SqliteItemRepository> _logger;
         private HttpClient _httpClient;
@@ -38,6 +40,7 @@ namespace Emby.Server.Implementations.Data
         /// <param name="config">Instance of the <see cref="IServerConfigurationManager"/> interface.</param>
         /// <param name="appHost">Instance of the <see cref="IServerApplicationHost"/> interface.</param>
         /// <param name="logger">Instance of the <see cref="ILogger{SqliteItemRepository}"/> interface.</param>
+        /// <param name="memoryCache">The memory cache.</param>
         /// <param name="localization">Instance of the <see cref="ILocalizationManager"/> interface.</param>
         /// <param name="imageProcessor">Instance of the <see cref="IImageProcessor"/> interface.</param>
         /// <param name="httpClientFactory">The <see cref="IHttpClientFactory"/>.</param>
@@ -47,10 +50,12 @@ namespace Emby.Server.Implementations.Data
             ILogger<SqliteItemRepository> logger,
             ILocalizationManager localization,
             IImageProcessor imageProcessor,
+            IMemoryCache memoryCache,
             IHttpClientFactory httpClientFactory)
         {
             _backend = new SqliteItemRepository(config, appHost, logger, localization, imageProcessor);
             _logger = logger;
+            _memoryCache = memoryCache;
             _httpClient = httpClientFactory.CreateClient(NamedClient.Default);
         }
 
@@ -157,6 +162,41 @@ namespace Emby.Server.Implementations.Data
             return _backend.GetAllArtists(query);
         }
 
+        private async Task<List<(BaseItem Item, ItemCounts ItemCounts)>> SearchAudio(string artistId, int limit)
+        {
+            // string searchEP = $"https://api.spotify.com/v1/search?q={search}&type=artist&limit={limit}";
+            _logger.LogInformation("Searching spotify for {N} audio track by artis {artistId}", limit, artistId);
+            var requestMessage = new HttpRequestMessage(HttpMethod.Get, searchEP);
+            HttpResponseMessage resp = await _httpClient.SendAsync(requestMessage);
+            string body = await resp.Content.ReadAsStringAsync();
+            if (resp.StatusCode != HttpStatusCode.OK)
+            {
+                _logger.LogWarning(
+                        "Spotify search failed with code {Code} : {Text}",
+                        resp.StatusCode,
+                        body);
+            }
+            else
+            {
+                // _logger.LogInformation("Spotify artist search returned {Result}", body);
+                SpotifyData.Root? al = JsonSerializer.Deserialize<SpotifyData.Root>(body, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+                if (al is null)
+                {
+                    _logger.LogWarning("Error deserializing Spotify data {Data}", body);
+                    return new List<(BaseItem, ItemCounts)>();
+                }
+                else
+                {
+                    return al.GetItems(_logger, _memoryCache);
+                }
+            }
+
+            return new List<(BaseItem, ItemCounts)>();
+        }
+
         private async Task<List<(BaseItem Item, ItemCounts ItemCounts)>> SearchArtist(string search, int limit)
         {
             string searchEP = $"https://api.spotify.com/v1/search?q={search}&type=artist&limit={limit}";
@@ -173,7 +213,7 @@ namespace Emby.Server.Implementations.Data
             }
             else
             {
-                _logger.LogInformation("Spotify artist search returned {Result}", body);
+                // _logger.LogInformation("Spotify artist search returned {Result}", body);
                 SpotifyData.Root? al = JsonSerializer.Deserialize<SpotifyData.Root>(body, new JsonSerializerOptions
                     {
                         PropertyNameCaseInsensitive = true
@@ -185,7 +225,7 @@ namespace Emby.Server.Implementations.Data
                 }
                 else
                 {
-                    return al.GetItems(_logger);
+                    return al.GetItems(_logger, _memoryCache);
                 }
             }
 
