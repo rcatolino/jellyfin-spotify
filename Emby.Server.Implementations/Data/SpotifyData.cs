@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using System.Text.Json.Serialization;
 using MediaBrowser.Controller.Entities;
@@ -18,27 +19,35 @@ namespace Emby.Server.Implementations.Data
     public class SpotifyData
     {
         /// <summary>
-        /// Class Artist containing spotify artist data.
+        /// Interface IJSONToItems representing classes that can be converted to a list of BaseItem.
         /// </summary>
-        public class Artist
+        public interface IJSONToItems
         {
             /// <summary>
-            /// Gets or sets the Spotify Artist ID.
+            /// Convert json response to BaseItem.
+            /// </summary>
+            /// <param name="logger">Logger.</param>
+            /// <param name="memoryCache">MemoryCache.</param>
+            /// <returns> The list of artists as BaseItems.</returns>
+            List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache);
+        }
+
+        /// <summary>
+        /// Class CommonData containing data common to many spotify types.
+        /// </summary>
+        public class CommonData
+        {
+            /// <summary>
+            /// Gets or sets the Spotify Track ID.
             /// </summary>
             [JsonRequired]
             public string Id { get; set; }
 
             /// <summary>
-            /// Gets or sets the Spotify Artist Name.
+            /// Gets or sets the track name.
             /// </summary>
             [JsonRequired]
             public string Name { get; set; }
-
-            /// <summary>
-            /// Gets or sets the Spotify Artist uri.
-            /// </summary>
-            [JsonRequired]
-            public string Uri { get; set; }
 
             /// <summary>
             /// Gets or sets the item urls.
@@ -48,23 +57,196 @@ namespace Emby.Server.Implementations.Data
             public Dictionary<string, string> Urls { get; set; }
 
             /// <summary>
+            /// Gets or sets the Spotify Artist uri.
+            /// </summary>
+            [JsonRequired]
+            public string Uri { get; set; }
+
+            /// <summary>
             /// Gets or sets the genres.
             /// </summary>
             /// <value>The genres.</value>
-            [JsonRequired]
             public string[] Genres { get; set; }
+
+            /// <summary>
+            /// Fill provided base item values.
+            /// </summary>
+            /// <typeparam name="T">Entity type (Audio/MusicArtist/MusicAlbum,etc.).</typeparam>
+            /// <param name="item">BaseItem.</param>
+            /// <param name="logger">Logger.</param>
+            /// <returns> The BaseItem with filled values.</returns>
+            public T ToItem<T>(T item, ILogger logger)
+                where T : BaseItem
+            {
+                item.Name = Name;
+                item.Id = Base62.B62ToGuid(Id, logger);
+                item.ServiceName = "spotify";
+                item.ExternalId = Id;
+                item.ProviderIds = new Dictionary<string, string>() { { "spotify", Id } };
+
+                if (Urls.ContainsKey("spotify"))
+                {
+                    item.HomePageUrl = Urls["spotify"];
+                }
+
+                if (Genres is not null)
+                {
+                    item.Genres = Genres;
+                }
+
+                return item;
+            }
+        }
+
+        /// <summary>
+        /// Class Album containing spotify album data.
+        /// </summary>
+        public class Album : CommonData
+        {
+            /// <summary>
+            /// Gets or sets the Spotify Artist List.
+            /// </summary>
+            [JsonRequired]
+            public Artist[] Artists { get; set; }
+
+            /// <summary>
+            /// Gets or sets the track number.
+            /// </summary>
+            [JsonRequired]
+            [JsonPropertyName("total_tracks")]
+            public int TrackCount { get; set; }
+        }
+
+        /// <summary>
+        /// Class Track containing spotify track data.
+        /// </summary>
+        public class Track : CommonData
+        {
+            /// <summary>
+            /// Gets or sets the Spotify Artist List.
+            /// </summary>
+            [JsonRequired]
+            public Artist[] Artists { get; set; }
+
+            /// <summary>
+            /// Gets or sets the duration (in ms).
+            /// </summary>
+            [JsonRequired]
+            [JsonPropertyName("duration_ms")]
+            public long DurationMs { get; set; }
+
+            /// <summary>
+            /// Gets or sets the track number.
+            /// </summary>
+            [JsonRequired]
+            [JsonPropertyName("track_number")]
+            public int TrackNumber { get; set; }
+        }
+
+        /// <summary>
+        /// Class Artist containing spotify artist data.
+        /// </summary>
+        public class Artist : CommonData
+        {
+        }
+
+        /// <summary>
+        /// Class TrackList containing a list of Spotify Tracks.
+        /// </summary>
+        public class TrackList : IJSONToItems
+        {
+            /// <summary>
+            /// Gets or sets the Spotify Album List.
+            /// </summary>
+            [JsonRequired]
+            public Track[] Items { get; set; }
+
+            /// <inheritdoc/>
+            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache)
+            {
+                var items = Items.Select(i =>
+                    {
+                        var track = i.ToItem(new Audio(), logger);
+                        memoryCache.Set(track.Id, track, new TimeSpan(1, 0, 0));
+                        return ((BaseItem)track, new ItemCounts { SongCount = 1 });
+                    });
+                return items.ToList();
+            }
+        }
+
+        /// <summary>
+        /// Class TopTrackList containing a list of Spotify Tracks.
+        /// </summary>
+        public class TopTrackList : IJSONToItems
+        {
+            /// <summary>
+            /// Gets or sets the Spotify Album List.
+            /// </summary>
+            [JsonRequired]
+            public Track[] Tracks { get; set; }
+
+            /// <inheritdoc/>
+            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache)
+            {
+                var items = Tracks.Select(i =>
+                    {
+                        var track = i.ToItem(new Audio(), logger);
+                        memoryCache.Set(track.Id, track, new TimeSpan(1, 0, 0));
+                        return ((BaseItem)track, new ItemCounts { SongCount = 1 });
+                    });
+                return items.ToList();
+            }
+        }
+
+        /// <summary>
+        /// Class AlbumList containing a list of Spotify Artists.
+        /// </summary>
+        public class AlbumList : IJSONToItems
+        {
+            /// <summary>
+            /// Gets or sets the Spotify Album List.
+            /// </summary>
+            [JsonRequired]
+            public Album[] Items { get; set; }
+
+            /// <inheritdoc/>
+            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache)
+            {
+                var items = Items.Select(i =>
+                    {
+                        var album = i.ToItem(new MusicAlbum(), logger);
+                        memoryCache.Set(album.Id, album, new TimeSpan(1, 0, 0));
+                        return ((BaseItem)album, new ItemCounts { AlbumCount = 1 });
+                    });
+                return items.ToList();
+            }
         }
 
         /// <summary>
         /// Class ArtistList containing a list of Spotify Artists.
         /// </summary>
-        public class ArtistList
+        public class ArtistList : IJSONToItems
         {
             /// <summary>
             /// Gets or sets the Spotify Artist List.
             /// </summary>
             [JsonRequired]
             public Artist[] Items { get; set; }
+
+            /// <inheritdoc/>
+            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache)
+            {
+                var items = Items.Select(i =>
+                    {
+                        var artist = i.ToItem(new MusicArtist(), logger);
+                        memoryCache.Set(artist.Id, artist, new TimeSpan(1, 0, 0));
+                        // We need to keep this artist in cache in order to be able to answer future artist queries by ID :
+                        // we can't always query spotify with the GUID as it doesn't always map to the spotify ID.
+                        // But we don't need to keep it forever as it should be saved in the database if we actually listen to it
+                        return ((BaseItem)artist, new ItemCounts { ArtistCount = 1 });
+                    });
+                return items.ToList();
+            }
         }
 
         private class Base62
@@ -91,6 +273,7 @@ namespace Emby.Server.Implementations.Data
                 // In this case we just remove the MSB, the original id will be stored in the ExternalId anyway and the MusicArtist is kept in cache.
                 if (byteArray.Length == 17)
                 {
+                    logger.LogInformation("Spotify 17 byte ID {SpotID} : {Hex}", base62String, byteArray);
                     return new Guid(new ArraySegment<byte>(byteArray, 1, byteArray.Length - 1));
                 }
                 else if (byteArray.Length < 16)
@@ -112,58 +295,73 @@ namespace Emby.Server.Implementations.Data
         }
 
         /// <summary>
-        /// Class Root containing a Spotify Api result.
+        /// Class Error containing a Spotify error result.
         /// </summary>
-        public class Root
+        public class Error
+        {
+            /// <summary>
+            /// Gets or sets the http status.
+            /// </summary>
+            [JsonRequired]
+            public int Status { get; set; }
+
+            /// <summary>
+            /// Gets or sets the error message.
+            /// </summary>
+            [JsonRequired]
+            public string Message { get; set; }
+        }
+
+        /// <summary>
+        /// Class SearchResponse containing a Spotify Api result to a Search query.
+        /// </summary>
+        public class SearchResponse : IJSONToItems
         {
             /// <summary>
             /// Gets or sets the list of artists.
             /// </summary>
-            [JsonRequired]
             public ArtistList Artists { get; set; }
 
             /// <summary>
-            /// Exports BaseItem list the spotify data.
+            /// Gets or sets the list of albums.
             /// </summary>
-            /// <param name="logger">Logger.</param>
-            /// <param name="memoryCache">MemoryCache.</param>
-            /// <returns> The list of artists as BaseItems.</returns>
-            public List<(BaseItem Items, ItemCounts Counts)> GetItems(ILogger logger, IMemoryCache memoryCache)
+            public TrackList Tracks { get; set; }
+
+            /// <summary>
+            /// Gets or sets the list of albums.
+            /// </summary>
+            public AlbumList Albums { get; set; }
+
+            /// <summary>
+            /// Gets or sets spotify error.
+            /// </summary>
+            public Error Error { get; set; }
+
+            /// <inheritdoc/>
+            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache)
             {
-                var gtest = new Guid("66c034dd-360e-2cda-3576-5c59b994cb96");
-                var bgtest = Base62.B62ToGuid("6jPPWvp74YGsboZjvxfvVe", logger);
-                if (!bgtest.Equals(gtest))
+                var items = new List<List<(BaseItem, ItemCounts)>>();
+
+                if (Artists is not null)
                 {
-                    logger.LogWarning("Base62 decoder test failed for value 6jPPWvp74YGsboZjvxfvVe, expected {EG}, got {GG}", gtest, bgtest);
-                    throw new InvalidBase62Decoder();
+                    logger.LogInformation("Spotify query got {N} artists matches", Artists.Items.Length);
+                    items.Add(Artists.ToItems(logger, memoryCache));
                 }
 
-                var artists = new List<(BaseItem, ItemCounts)>();
-                foreach (var a in Artists.Items)
+                if (Tracks is not null)
                 {
-                    var artist = new MusicArtist
-                    {
-                        Name = a.Name,
-                        Id = Base62.B62ToGuid(a.Id, logger),
-                        Genres = a.Genres,
-                        ServiceName = "spotify",
-                        ExternalId = a.Id,
-                        ProviderIds = new Dictionary<string, string>() { { "spotify", a.Id } },
-                    };
-
-                    if (a.Urls.ContainsKey("spotify"))
-                    {
-                        artist.HomePageUrl = $"https://open.spotify.com/artist/{a.Id}";
-                    }
-
-                    // We need to keep this artist in cache in order to be able to answer future artist queries by ID :
-                    // we can't always query spotify with the GUID as it doesn't always map to the spotify ID.
-                    // But we don't need to keep it forever as it should be saved in the database if we actually listen to it
-                    memoryCache.Set(artist.Id, artist, new TimeSpan(1, 0, 0));
-                    artists.Add((artist, new ItemCounts { ArtistCount = 1 }));
+                    logger.LogInformation("Spotify query got {N} track matches", Tracks.Items.Length);
+                    items.Add(Tracks.ToItems(logger, memoryCache));
                 }
 
-                return artists;
+                if (Albums is not null)
+                {
+                    logger.LogInformation("Spotify query got {N} album matches", Albums.Items.Length);
+                    items.Add(Albums.ToItems(logger, memoryCache));
+                }
+
+                var res = items.SelectMany(list => list).ToList();
+                return res;
             }
         }
     }

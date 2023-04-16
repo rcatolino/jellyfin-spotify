@@ -30,6 +30,7 @@ namespace Emby.Server.Implementations.Data
     public class SpotItemRepository : IItemRepository
     {
         private readonly IMemoryCache _memoryCache;
+        private readonly string spotAPI = "https://api.spotify.com/v1";
         private SqliteItemRepository _backend;
         private ILogger<SqliteItemRepository> _logger;
         private HttpClient _httpClient;
@@ -162,94 +163,121 @@ namespace Emby.Server.Implementations.Data
             return _backend.GetAllArtists(query);
         }
 
-        private async Task<List<(BaseItem Item, ItemCounts ItemCounts)>> SearchAudio(string artistId, int limit)
+        private List<(BaseItem Item, ItemCounts ItemCounts)> SpotQuery<T>(string query)
+            where T : SpotifyData.IJSONToItems
         {
-            // string searchEP = $"https://api.spotify.com/v1/search?q={search}&type=artist&limit={limit}";
-            _logger.LogInformation("Searching spotify for {N} audio track by artis {artistId}", limit, artistId);
-            var requestMessage = new HttpRequestMessage(HttpMethod.Get, searchEP);
+            var taskSearch = AsyncSpotQuery<T>(query);
+            return taskSearch.GetAwaiter().GetResult();
+        }
+
+        private async Task<List<(BaseItem Item, ItemCounts ItemCounts)>> AsyncSpotQuery<T>(string query, bool retry = true)
+            where T : SpotifyData.IJSONToItems
+        {
+            var requestMessage = new HttpRequestMessage(HttpMethod.Get, query);
             HttpResponseMessage resp = await _httpClient.SendAsync(requestMessage);
             string body = await resp.Content.ReadAsStringAsync();
-            if (resp.StatusCode != HttpStatusCode.OK)
+            try
             {
-                _logger.LogWarning(
-                        "Spotify search failed with code {Code} : {Text}",
-                        resp.StatusCode,
-                        body);
-            }
-            else
-            {
-                // _logger.LogInformation("Spotify artist search returned {Result}", body);
-                SpotifyData.Root? al = JsonSerializer.Deserialize<SpotifyData.Root>(body, new JsonSerializerOptions
+                var json = JsonSerializer.Deserialize<T>(body, new JsonSerializerOptions
                     {
                         PropertyNameCaseInsensitive = true
                     });
-                if (al is null)
+
+                if (json is null)
                 {
                     _logger.LogWarning("Error deserializing Spotify data {Data}", body);
                     return new List<(BaseItem, ItemCounts)>();
                 }
+
+                if (resp.StatusCode == HttpStatusCode.Unauthorized)
+                {
+                    SpotLogin();
+                    return await AsyncSpotQuery<T>(query, false);
+                }
+                else if (resp.StatusCode != HttpStatusCode.OK)
+                {
+                    _logger.LogWarning("Spotify search failed with code {Code} : {Text}", resp.StatusCode, body);
+                }
                 else
                 {
-                    return al.GetItems(_logger, _memoryCache);
+                    _logger.LogInformation("Spotify query : {Q}, result : {J}", query, json);
+                    return json.ToItems(_logger, _memoryCache);
                 }
+            }
+            catch (System.Text.Json.JsonException e)
+            {
+                _logger.LogWarning(
+                        "Error trying to deserialize json {J} for query {Q} : {E}",
+                        body,
+                        query,
+                        e.Message);
             }
 
             return new List<(BaseItem, ItemCounts)>();
         }
 
-        private async Task<List<(BaseItem Item, ItemCounts ItemCounts)>> SearchArtist(string search, int limit)
+        private List<(BaseItem Item, ItemCounts ItemCounts)> ArtistAlbum(Guid artistId, int limit)
         {
-            string searchEP = $"https://api.spotify.com/v1/search?q={search}&type=artist&limit={limit}";
-            _logger.LogInformation("Searching spotify for {N} artists matching {Search}", limit, search);
-            var requestMessage = new HttpRequestMessage(HttpMethod.Get, searchEP);
-            HttpResponseMessage resp = await _httpClient.SendAsync(requestMessage);
-            string body = await resp.Content.ReadAsStringAsync();
-            if (resp.StatusCode != HttpStatusCode.OK)
+            _memoryCache.TryGetValue(artistId, out BaseItem? item);
+            if (item is not null && item.ServiceName == "spotify")
             {
-                _logger.LogWarning(
-                        "Spotify search failed with code {Code} : {Text}",
-                        resp.StatusCode,
-                        body);
+                _logger.LogInformation("Searching spotify for albums by artist {ArtistId}", item.ExternalId);
+                string searchEP = $"{spotAPI}/artists/{item.ExternalId}/albums?include_groups=album&limit={limit}";
+                var res = SpotQuery<SpotifyData.AlbumList>(searchEP);
+                _logger.LogInformation("Searching spotify for albums by artist {ArtistId} -> {N} results", item.ExternalId, res.Count);
+                return res;
             }
             else
             {
-                // _logger.LogInformation("Spotify artist search returned {Result}", body);
-                SpotifyData.Root? al = JsonSerializer.Deserialize<SpotifyData.Root>(body, new JsonSerializerOptions
-                    {
-                        PropertyNameCaseInsensitive = true
-                    });
-                if (al is null)
-                {
-                    _logger.LogWarning("Error deserializing Spotify data {Data}", body);
-                    return new List<(BaseItem, ItemCounts)>();
-                }
-                else
-                {
-                    return al.GetItems(_logger, _memoryCache);
-                }
+                _logger.LogInformation("Not searching artist on spotify : Artist {Guid} is not in cache anymore", artistId);
             }
 
             return new List<(BaseItem, ItemCounts)>();
+        }
+
+        private List<(BaseItem Item, ItemCounts ItemCounts)> ArtistTopTracks(Guid artistId)
+        {
+            _memoryCache.TryGetValue(artistId, out BaseItem? item);
+            if (item is not null && item.ServiceName == "spotify")
+            {
+                // TODO: don't hardcode market. But where to get it ?
+                string searchEP = $"{spotAPI}/artists/{item.ExternalId}/top-tracks?market=FR";
+                var res = SpotQuery<SpotifyData.TopTrackList>(searchEP);
+                _logger.LogInformation("Searching spotify for track by artist {ArtistId} -> {N} results", item.ExternalId, res.Count);
+                return res;
+            }
+            else
+            {
+                _logger.LogWarning("Error spotify artist lookup : Artist {Guid} is not in cache anymore", artistId);
+            }
+
+            return new List<(BaseItem, ItemCounts)>();
+        }
+
+        private List<(BaseItem Item, ItemCounts ItemCounts)> SearchSpotItem(string search, string what, int limit)
+        {
+            string searchEP = $"https://api.spotify.com/v1/search?q={search}&type={what}&limit={limit}";
+            _logger.LogInformation("SearchSpotItem for {N} {What} matching {Search}", limit, what, search);
+            return SpotQuery<SpotifyData.SearchResponse>(searchEP);
         }
 
         /// <inheritdoc/>
-        // TODO: This method sould return additional artists from spotify, up to query.Limit
         public QueryResult<(BaseItem Item, ItemCounts ItemCounts)> GetArtists(InternalItemsQuery query)
         {
+            // First, query the local database.
             QueryResult<(BaseItem, ItemCounts)> results = _backend.GetArtists(query);
             LogQuery("GetArtists", query, results.TotalRecordCount);
+            // Then if we are looking for more results, query spotify.
             if (query.SearchTerm is not null && results.TotalRecordCount < query.Limit)
             {
-                var spotSearch = SearchArtist(
+                var spotResults = SearchSpotItem(
                         query.SearchTerm,
+                        "artist",
                         (query.Limit ?? 20) - results.TotalRecordCount);
-                var spotResults = spotSearch.GetAwaiter().GetResult();
                 return new QueryResult<(BaseItem, ItemCounts)>(results.Items.Concat(spotResults).ToList());
             }
-            else
-            {
-                return results;
-            }
+
+            return results;
         }
 
         /// <inheritdoc/>
@@ -291,22 +319,58 @@ namespace Emby.Server.Implementations.Data
         }
 
         /// <inheritdoc/>
-        // TODO: we should query spotify for audio queries, up to query.Limit results
         public List<BaseItem> GetItemList(InternalItemsQuery query)
         {
             var itemtypes = query.IncludeItemTypes;
-            List<BaseItem> results = _backend.GetItemList(query);
+            var results = new List<List<BaseItem>> { _backend.GetItemList(query) };
             if (itemtypes.Contains(BaseItemKind.Audio) || itemtypes.Contains(BaseItemKind.MusicAlbum) || itemtypes.Contains(BaseItemKind.MusicArtist))
             {
                 LogQuery("GetItemList", query, results.Count);
             }
 
-            if (results.Count < query.Limit && query.IncludeItemTypes.Contains(BaseItemKind.Audio))
+            if (itemtypes.Contains(BaseItemKind.Audio))
             {
-                _logger.LogInformation("We should query spotify for {N} results", query.Limit - results.Count);
+                if (query.ArtistIds.Length > 0)
+                {
+                    results.Add(query.ArtistIds
+                        .Select(id => ArtistTopTracks(id).Select(pair => pair.Item))
+                        .SelectMany(list => list)
+                        .ToList());
+                    _logger.LogInformation("Query Audio Items from stpotify for {Ids} -> {N} results", query.ArtistIds, results.Last().Count);
+                }
+
+                if (query.SearchTerm is not null)
+                {
+                    results.Add(
+                            SearchSpotItem(query.SearchTerm, "track", query.Limit ?? 25)
+                            .Select(itemAndCount => itemAndCount.Item)
+                            .ToList());
+                    _logger.LogInformation("Query Audio Items from stpotify matching {Search} -> {N} results", query.SearchTerm, results.Last().Count);
+                }
             }
 
-            return results;
+            if (itemtypes.Contains(BaseItemKind.MusicAlbum))
+            {
+                if (query.ArtistIds.Length > 0)
+                {
+                    results.Add(query.ArtistIds
+                        .Select(id => ArtistAlbum(id, 50).Select(pair => pair.Item))
+                        .SelectMany(list => list)
+                        .ToList());
+                    _logger.LogInformation("Query MusicAlbum Items from stpotify for {Ids} -> {N} results", query.ArtistIds, results.Last().Count);
+                }
+
+                if (query.SearchTerm is not null)
+                {
+                    results.Add(
+                            SearchSpotItem(query.SearchTerm, "album", query.Limit ?? 25)
+                            .Select(itemAndCount => itemAndCount.Item)
+                            .ToList());
+                    _logger.LogInformation("Query Album Items from stpotify matching {Search} -> {N} results", query.SearchTerm, results.Last().Count);
+                }
+            }
+
+            return results.SelectMany(list => list).ToList();
         }
 
         /// <inheritdoc/>
@@ -314,6 +378,16 @@ namespace Emby.Server.Implementations.Data
         {
             QueryResult<BaseItem> results = _backend.GetItems(query);
             LogQuery("GetItems", query, results.TotalRecordCount);
+            if (query.IncludeItemTypes.Contains(BaseItemKind.MusicAlbum) && query.AlbumArtistIds.Length > 0)
+            {
+                return new QueryResult<BaseItem>(
+                        query.AlbumArtistIds
+                            .Select(id => ArtistAlbum(id, Math.Min(49, (query.Limit ?? 20) - results.TotalRecordCount)).Select(pair => pair.Item))
+                            .SelectMany(list => list)
+                            .Concat(results.Items)
+                            .ToList());
+            }
+
             return results;
         }
 
