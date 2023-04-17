@@ -63,7 +63,7 @@ namespace Emby.Server.Implementations.Data
         private void LogQuery(string methodName, InternalItemsQuery query, int resultCount)
         {
             _logger.LogInformation(
-                    "{Method}: {SearchTerm} limit {Limit} type {Type} AlbumArtists {AA} Ancestor {Ancestor} Album {A} Artist {Ar} ContributingArtistIds {CAIs} ItemId {IId} -> {N} results found",
+                    "{Method}: {SearchTerm} limit {Limit} type {Type} AlbumArtists {AA} Ancestor {Ancestor} Album {A} Artist {Ar} ContributingArtistIds {CAIs} ItemId {IId} Persons {P} TopParents {TP} ParentId {PI} -> {N} local results found",
                     methodName,
                     query.SearchTerm,
                     query.Limit,
@@ -74,6 +74,9 @@ namespace Emby.Server.Implementations.Data
                     query.ArtistIds,
                     query.ContributingArtistIds,
                     query.ItemIds,
+                    query.PersonIds,
+                    query.TopParentIds,
+                    query.ParentId,
                     resultCount);
         }
 
@@ -229,7 +232,26 @@ namespace Emby.Server.Implementations.Data
             }
             else
             {
-                _logger.LogInformation("Not searching artist on spotify : Artist {Guid} is not in cache anymore", artistId);
+                _logger.LogInformation("Spotify artist album on spotify : Artist {Guid} is not in cache or doesn't come from spotify", artistId);
+            }
+
+            return new List<(BaseItem, ItemCounts)>();
+        }
+
+        private List<(BaseItem Item, ItemCounts ItemCounts)> AlbumTracks(Guid albumId)
+        {
+            _memoryCache.TryGetValue(albumId, out BaseItem? item);
+            if (item is not null && item.ServiceName == "spotify")
+            {
+                // TODO: don't hardcode market. But where to get it ?
+                string searchEP = $"{spotAPI}/albums/{item.ExternalId}/tracks?market=FR";
+                var res = SpotQuery<SpotifyData.TrackList>(searchEP);
+                _logger.LogInformation("Searching spotify for track on album {AlbumId} -> {N} results", item.ExternalId, res.Count);
+                return res;
+            }
+            else
+            {
+                _logger.LogInformation("Spotify album tracks lookup : Album {Guid} is not in cache or doesn't come from spotify", albumId);
             }
 
             return new List<(BaseItem, ItemCounts)>();
@@ -248,7 +270,7 @@ namespace Emby.Server.Implementations.Data
             }
             else
             {
-                _logger.LogWarning("Error spotify artist lookup : Artist {Guid} is not in cache anymore", artistId);
+                _logger.LogInformation("Spotify artist track lookup : Artist {Guid} is not in cache or doesn't come from spotify", artistId);
             }
 
             return new List<(BaseItem, ItemCounts)>();
@@ -314,18 +336,25 @@ namespace Emby.Server.Implementations.Data
         public List<Guid> GetItemIdsList(InternalItemsQuery query)
         {
             List<Guid> results = _backend.GetItemIdsList(query);
-            LogQuery("GetItemIdsList", query, results.Count);
             return results;
         }
 
-        /// <inheritdoc/>
-        public List<BaseItem> GetItemList(InternalItemsQuery query)
+        private IReadOnlyList<BaseItem> AddSpotItems(InternalItemsQuery query, IReadOnlyList<BaseItem> db_results)
         {
             var itemtypes = query.IncludeItemTypes;
-            var results = new List<List<BaseItem>> { _backend.GetItemList(query) };
-            if (itemtypes.Contains(BaseItemKind.Audio) || itemtypes.Contains(BaseItemKind.MusicAlbum) || itemtypes.Contains(BaseItemKind.MusicArtist))
+            LogQuery("AddSpotItems", query, db_results.Count);
+            if (query.Limit is not null && query.Limit < db_results.Count)
             {
-                LogQuery("GetItemList", query, results.Count);
+                return db_results;
+            }
+
+            // TODO: Add limit check before each query
+            var results = new List<IReadOnlyList<BaseItem>> { db_results };
+            if (itemtypes.Length == 0 && !query.ParentId.Equals(Guid.Empty))
+            {
+                // This is the api's way to ask for an album tracks ?
+                results.Add(AlbumTracks(query.ParentId).Select(pair => pair.Item).ToList());
+                _logger.LogInformation("Query Audio Items from stpotify for album {Ids} -> {N} results", query.ParentId, results.Last().Count);
             }
 
             if (itemtypes.Contains(BaseItemKind.Audio))
@@ -374,21 +403,17 @@ namespace Emby.Server.Implementations.Data
         }
 
         /// <inheritdoc/>
+        public List<BaseItem> GetItemList(InternalItemsQuery query)
+        {
+            var results = _backend.GetItemList(query);
+            return AddSpotItems(query, results).ToList();
+        }
+
+        /// <inheritdoc/>
         public QueryResult<BaseItem> GetItems(InternalItemsQuery query)
         {
             QueryResult<BaseItem> results = _backend.GetItems(query);
-            LogQuery("GetItems", query, results.TotalRecordCount);
-            if (query.IncludeItemTypes.Contains(BaseItemKind.MusicAlbum) && query.AlbumArtistIds.Length > 0)
-            {
-                return new QueryResult<BaseItem>(
-                        query.AlbumArtistIds
-                            .Select(id => ArtistAlbum(id, Math.Min(49, (query.Limit ?? 20) - results.TotalRecordCount)).Select(pair => pair.Item))
-                            .SelectMany(list => list)
-                            .Concat(results.Items)
-                            .ToList());
-            }
-
-            return results;
+            return new QueryResult<BaseItem>(AddSpotItems(query, results.Items));
         }
 
         /// <inheritdoc/>
