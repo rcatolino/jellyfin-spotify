@@ -113,7 +113,7 @@ namespace Emby.Server.Implementations.Data
                 if (Images is not null && Images.Length > 0)
                 {
                     var img = Images.OrderByDescending(i => i.Width).First();
-                    logger.LogInformation("Setting {U} : {W}x{H} as primary image", img.Url, img.Width, img.Height);
+                    // logger.LogInformation("Setting {U} : {W}x{H} as primary image", img.Url, img.Width, img.Height);
                     item.AddImage(new ItemImageInfo { Width = img.Width, Height = img.Height, Path = img.Url, Type = ImageType.Primary });
                 }
 
@@ -121,7 +121,7 @@ namespace Emby.Server.Implementations.Data
                 if (Images is not null && Images.Length > 1)
                 {
                     var img = Images.OrderBy(i => i.Width).First();
-                    logger.LogInformation("Setting {U} : {W}x{H} as thumb image", img.Url, img.Width, img.Height);
+                    // logger.LogInformation("Setting {U} : {W}x{H} as thumb image", img.Url, img.Width, img.Height);
                     item.AddImage(new ItemImageInfo { Width = img.Width, Height = img.Height, Path = img.Url, Type = ImageType.Thumb });
                 }
 
@@ -285,6 +285,12 @@ namespace Emby.Server.Implementations.Data
             /// </summary>
             [JsonRequired]
             public Album[] Items { get; set; }
+
+            /// <summary>
+            /// Gets or sets the number of albums found.
+            /// </summary>
+            [JsonRequired]
+            public int Total { get; set; }
 
             /// <inheritdoc/>
             public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null)

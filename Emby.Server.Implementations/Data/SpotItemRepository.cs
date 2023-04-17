@@ -273,7 +273,7 @@ namespace Emby.Server.Implementations.Data
             _memoryCache.TryGetValue(artistId, out BaseItem? item);
             if (item is not null && item.ServiceName == "spotify")
             {
-                string searchEP = $"{spotAPI}/artists/{item.ExternalId}/albums?include_groups=album&limit={limit}";
+                string searchEP = $"{spotAPI}/artists/{item.ExternalId}/albums?include_groups=album&limit={limit}&market=FR";
                 var res = SpotQuery<SpotifyData.AlbumList>(searchEP, artistId);
                 _logger.LogInformation("Searching spotify for albums by artist {ArtistId} -> {N} results", item.ExternalId, res.Count);
                 return res;
