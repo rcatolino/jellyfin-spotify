@@ -60,24 +60,68 @@ namespace Emby.Server.Implementations.Data
             _httpClient = httpClientFactory.CreateClient(NamedClient.Default);
         }
 
+        private string ListToString<T>(T[] l)
+            where T : IFormattable
+        {
+            var inner = string.Join(", ", l.Select(i => i.ToString()));
+            return $"[{inner}]";
+        }
+
         private void LogQuery(string methodName, InternalItemsQuery query, int resultCount)
         {
-            _logger.LogInformation(
-                    "{Method}: {SearchTerm} limit {Limit} type {Type} AlbumArtists {AA} Ancestor {Ancestor} Album {A} Artist {Ar} ContributingArtistIds {CAIs} ItemId {IId} Persons {P} TopParents {TP} ParentId {PI} -> {N} local results found",
-                    methodName,
-                    query.SearchTerm,
-                    query.Limit,
-                    query.IncludeItemTypes,
-                    query.AlbumArtistIds,
-                    query.AncestorIds,
-                    query.AlbumIds,
-                    query.ArtistIds,
-                    query.ContributingArtistIds,
-                    query.ItemIds,
-                    query.PersonIds,
-                    query.TopParentIds,
-                    query.ParentId,
-                    resultCount);
+            List<string> parts = new List<string> { methodName };
+            if (query.SearchTerm is not null)
+            {
+                parts.Add($"Search {query.SearchTerm}");
+            }
+
+            if (query.Limit is not null)
+            {
+                parts.Add($"limit {query.Limit}");
+            }
+
+            if (query.IncludeItemTypes.Length > 0)
+            {
+                parts.Add($"type {ListToString(query.IncludeItemTypes)}");
+            }
+
+            if (query.AlbumArtistIds.Length > 0)
+            {
+                parts.Add($"ArtistIds : {ListToString(query.AlbumArtistIds)}");
+            }
+
+            if (query.AncestorIds.Length > 0)
+            {
+                parts.Add($"AlbumArtistIds : {ListToString(query.AlbumArtistIds)}");
+            }
+
+            if (query.AlbumIds.Length > 0)
+            {
+                parts.Add($"AlbumIds : {ListToString(query.AlbumIds)}");
+            }
+
+            if (query.ContributingArtistIds.Length > 0)
+            {
+                parts.Add($"ContributingArtistIds : {ListToString(query.ContributingArtistIds)}");
+            }
+
+            if (query.ItemIds.Length > 0)
+            {
+                parts.Add($"ItemIds : {ListToString(query.ItemIds)}");
+            }
+
+            if (query.PersonIds.Length > 0)
+            {
+                parts.Add($"PersonIds : {ListToString(query.PersonIds)}");
+            }
+
+            if (!query.ParentId.Equals(Guid.Empty))
+            {
+                parts.Add($"ParentId : {query.ParentId}");
+            }
+
+            parts.Add($"-> {resultCount} results found");
+            _logger.LogInformation("{Msg}", string.Join(" ", parts));
         }
 
         /// <summary>
@@ -224,7 +268,6 @@ namespace Emby.Server.Implementations.Data
             _memoryCache.TryGetValue(artistId, out BaseItem? item);
             if (item is not null && item.ServiceName == "spotify")
             {
-                _logger.LogInformation("Searching spotify for albums by artist {ArtistId}", item.ExternalId);
                 string searchEP = $"{spotAPI}/artists/{item.ExternalId}/albums?include_groups=album&limit={limit}";
                 var res = SpotQuery<SpotifyData.AlbumList>(searchEP, artistId);
                 _logger.LogInformation("Searching spotify for albums by artist {ArtistId} -> {N} results", item.ExternalId, res.Count);
@@ -383,6 +426,15 @@ namespace Emby.Server.Implementations.Data
                 if (query.ArtistIds.Length > 0)
                 {
                     results.Add(query.ArtistIds
+                        .Select(id => ArtistAlbum(id, 50).Select(pair => pair.Item))
+                        .SelectMany(list => list)
+                        .ToList());
+                    _logger.LogInformation("Query MusicAlbum Items from stpotify for {Ids} -> {N} results", query.ArtistIds, results.Last().Count);
+                }
+
+                if (query.AlbumArtistIds.Length > 0)
+                {
+                    results.Add(query.AlbumArtistIds
                         .Select(id => ArtistAlbum(id, 50).Select(pair => pair.Item))
                         .SelectMany(list => list)
                         .ToList());
