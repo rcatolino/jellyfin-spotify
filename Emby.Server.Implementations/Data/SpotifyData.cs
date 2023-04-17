@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Numerics;
 using System.Text.Json.Serialization;
@@ -28,8 +29,9 @@ namespace Emby.Server.Implementations.Data
             /// </summary>
             /// <param name="logger">Logger.</param>
             /// <param name="memoryCache">MemoryCache.</param>
+            /// <param name="parentId">ID of parent Album/Artist if there is one.</param>
             /// <returns> The list of artists as BaseItems.</returns>
-            List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache);
+            List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null);
         }
 
         /// <summary>
@@ -74,15 +76,22 @@ namespace Emby.Server.Implementations.Data
             /// <typeparam name="T">Entity type (Audio/MusicArtist/MusicAlbum,etc.).</typeparam>
             /// <param name="item">BaseItem.</param>
             /// <param name="logger">Logger.</param>
+            /// <param name="parentId">ID of parent Album/Artist if there is one.</param>
             /// <returns> The BaseItem with filled values.</returns>
-            public T ToItem<T>(T item, ILogger logger)
+            public T ToItem<T>(T item, ILogger logger, Guid? parentId = null)
                 where T : BaseItem
             {
                 item.Name = Name;
                 item.Id = Base62.B62ToGuid(Id, logger);
                 item.ServiceName = "spotify";
                 item.ExternalId = Id;
+                item.SortName = Name;
                 item.ProviderIds = new Dictionary<string, string>() { { "spotify", Id } };
+
+                if (parentId is not null)
+                {
+                    item.ParentId = (Guid)parentId;
+                }
 
                 if (Urls.ContainsKey("spotify"))
                 {
@@ -115,6 +124,13 @@ namespace Emby.Server.Implementations.Data
             [JsonRequired]
             [JsonPropertyName("total_tracks")]
             public int TrackCount { get; set; }
+
+            /// <summary>
+            /// Gets or sets the track number.
+            /// </summary>
+            [JsonRequired]
+            [JsonPropertyName("release_date")]
+            public string ReleaseDate { get; set; }
         }
 
         /// <summary>
@@ -141,6 +157,13 @@ namespace Emby.Server.Implementations.Data
             [JsonRequired]
             [JsonPropertyName("track_number")]
             public int TrackNumber { get; set; }
+
+            /// <summary>
+            /// Gets or sets the disc number.
+            /// </summary>
+            [JsonRequired]
+            [JsonPropertyName("disc_number")]
+            public int DiscNumber { get; set; }
         }
 
         /// <summary>
@@ -162,11 +185,15 @@ namespace Emby.Server.Implementations.Data
             public Track[] Items { get; set; }
 
             /// <inheritdoc/>
-            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache)
+            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null)
             {
                 var items = Items.Select(i =>
                     {
-                        var track = i.ToItem(new Audio(), logger);
+                        var track = i.ToItem(new Audio(), logger, parentId);
+                        track.IndexNumber = i.TrackNumber;
+                        track.ParentIndexNumber = i.DiscNumber;
+                        track.RunTimeTicks = i.DurationMs * 10000;
+                        track.Artists = i.Artists.Select(a => a.Name).ToList();
                         memoryCache.Set(track.Id, track, new TimeSpan(1, 0, 0));
                         return ((BaseItem)track, new ItemCounts { SongCount = 1 });
                     });
@@ -180,17 +207,21 @@ namespace Emby.Server.Implementations.Data
         public class TopTrackList : IJSONToItems
         {
             /// <summary>
-            /// Gets or sets the Spotify Album List.
+            /// Gets or sets the Spotify Track List.
             /// </summary>
             [JsonRequired]
             public Track[] Tracks { get; set; }
 
             /// <inheritdoc/>
-            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache)
+            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null)
             {
                 var items = Tracks.Select(i =>
                     {
-                        var track = i.ToItem(new Audio(), logger);
+                        var track = i.ToItem(new Audio(), logger, parentId);
+                        track.IndexNumber = i.TrackNumber;
+                        track.ParentIndexNumber = i.DiscNumber;
+                        track.RunTimeTicks = i.DurationMs * 10000;
+                        track.Artists = i.Artists.Select(a => a.Name).ToList();
                         memoryCache.Set(track.Id, track, new TimeSpan(1, 0, 0));
                         return ((BaseItem)track, new ItemCounts { SongCount = 1 });
                     });
@@ -199,7 +230,7 @@ namespace Emby.Server.Implementations.Data
         }
 
         /// <summary>
-        /// Class AlbumList containing a list of Spotify Artists.
+        /// Class AlbumList containing a list of Spotify albums.
         /// </summary>
         public class AlbumList : IJSONToItems
         {
@@ -210,11 +241,20 @@ namespace Emby.Server.Implementations.Data
             public Album[] Items { get; set; }
 
             /// <inheritdoc/>
-            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache)
+            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null)
             {
                 var items = Items.Select(i =>
                     {
-                        var album = i.ToItem(new MusicAlbum(), logger);
+                        var album = i.ToItem(new MusicAlbum(), logger, parentId);
+                        album.Artists = i.Artists.Select(a => a.Name).ToList();
+                        try
+                        {
+                            album.ProductionYear = int.Parse(i.ReleaseDate.Split("-")[0], new CultureInfo("en-US"));
+                        }
+                        catch
+                        {
+                        }
+
                         memoryCache.Set(album.Id, album, new TimeSpan(1, 0, 0));
                         return ((BaseItem)album, new ItemCounts { AlbumCount = 1 });
                     });
@@ -234,11 +274,11 @@ namespace Emby.Server.Implementations.Data
             public Artist[] Items { get; set; }
 
             /// <inheritdoc/>
-            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache)
+            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null)
             {
                 var items = Items.Select(i =>
                     {
-                        var artist = i.ToItem(new MusicArtist(), logger);
+                        var artist = i.ToItem(new MusicArtist(), logger, parentId);
                         memoryCache.Set(artist.Id, artist, new TimeSpan(1, 0, 0));
                         // We need to keep this artist in cache in order to be able to answer future artist queries by ID :
                         // we can't always query spotify with the GUID as it doesn't always map to the spotify ID.
@@ -338,26 +378,26 @@ namespace Emby.Server.Implementations.Data
             public Error Error { get; set; }
 
             /// <inheritdoc/>
-            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache)
+            public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null)
             {
                 var items = new List<List<(BaseItem, ItemCounts)>>();
 
                 if (Artists is not null)
                 {
                     logger.LogInformation("Spotify query got {N} artists matches", Artists.Items.Length);
-                    items.Add(Artists.ToItems(logger, memoryCache));
+                    items.Add(Artists.ToItems(logger, memoryCache, parentId));
                 }
 
                 if (Tracks is not null)
                 {
                     logger.LogInformation("Spotify query got {N} track matches", Tracks.Items.Length);
-                    items.Add(Tracks.ToItems(logger, memoryCache));
+                    items.Add(Tracks.ToItems(logger, memoryCache, parentId));
                 }
 
                 if (Albums is not null)
                 {
                     logger.LogInformation("Spotify query got {N} album matches", Albums.Items.Length);
-                    items.Add(Albums.ToItems(logger, memoryCache));
+                    items.Add(Albums.ToItems(logger, memoryCache, parentId));
                 }
 
                 var res = items.SelectMany(list => list).ToList();

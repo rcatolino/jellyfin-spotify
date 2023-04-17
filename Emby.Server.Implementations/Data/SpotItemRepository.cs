@@ -166,14 +166,14 @@ namespace Emby.Server.Implementations.Data
             return _backend.GetAllArtists(query);
         }
 
-        private List<(BaseItem Item, ItemCounts ItemCounts)> SpotQuery<T>(string query)
+        private List<(BaseItem Item, ItemCounts ItemCounts)> SpotQuery<T>(string query, Guid? parentId = null)
             where T : SpotifyData.IJSONToItems
         {
-            var taskSearch = AsyncSpotQuery<T>(query);
+            var taskSearch = AsyncSpotQuery<T>(query, parentId);
             return taskSearch.GetAwaiter().GetResult();
         }
 
-        private async Task<List<(BaseItem Item, ItemCounts ItemCounts)>> AsyncSpotQuery<T>(string query, bool retry = true)
+        private async Task<List<(BaseItem Item, ItemCounts ItemCounts)>> AsyncSpotQuery<T>(string query, Guid? parentId = null, bool retry = true)
             where T : SpotifyData.IJSONToItems
         {
             var requestMessage = new HttpRequestMessage(HttpMethod.Get, query);
@@ -195,7 +195,7 @@ namespace Emby.Server.Implementations.Data
                 if (resp.StatusCode == HttpStatusCode.Unauthorized)
                 {
                     SpotLogin();
-                    return await AsyncSpotQuery<T>(query, false);
+                    return await AsyncSpotQuery<T>(query, parentId, false);
                 }
                 else if (resp.StatusCode != HttpStatusCode.OK)
                 {
@@ -204,7 +204,7 @@ namespace Emby.Server.Implementations.Data
                 else
                 {
                     _logger.LogInformation("Spotify query : {Q}, result : {J}", query, json);
-                    return json.ToItems(_logger, _memoryCache);
+                    return json.ToItems(_logger, _memoryCache, parentId);
                 }
             }
             catch (System.Text.Json.JsonException e)
@@ -226,7 +226,7 @@ namespace Emby.Server.Implementations.Data
             {
                 _logger.LogInformation("Searching spotify for albums by artist {ArtistId}", item.ExternalId);
                 string searchEP = $"{spotAPI}/artists/{item.ExternalId}/albums?include_groups=album&limit={limit}";
-                var res = SpotQuery<SpotifyData.AlbumList>(searchEP);
+                var res = SpotQuery<SpotifyData.AlbumList>(searchEP, artistId);
                 _logger.LogInformation("Searching spotify for albums by artist {ArtistId} -> {N} results", item.ExternalId, res.Count);
                 return res;
             }
@@ -244,8 +244,8 @@ namespace Emby.Server.Implementations.Data
             if (item is not null && item.ServiceName == "spotify")
             {
                 // TODO: don't hardcode market. But where to get it ?
-                string searchEP = $"{spotAPI}/albums/{item.ExternalId}/tracks?market=FR";
-                var res = SpotQuery<SpotifyData.TrackList>(searchEP);
+                string searchEP = $"{spotAPI}/albums/{item.ExternalId}/tracks?market=FR&limit=50";
+                var res = SpotQuery<SpotifyData.TrackList>(searchEP, albumId);
                 _logger.LogInformation("Searching spotify for track on album {AlbumId} -> {N} results", item.ExternalId, res.Count);
                 return res;
             }
@@ -264,7 +264,7 @@ namespace Emby.Server.Implementations.Data
             {
                 // TODO: don't hardcode market. But where to get it ?
                 string searchEP = $"{spotAPI}/artists/{item.ExternalId}/top-tracks?market=FR";
-                var res = SpotQuery<SpotifyData.TopTrackList>(searchEP);
+                var res = SpotQuery<SpotifyData.TopTrackList>(searchEP, artistId);
                 _logger.LogInformation("Searching spotify for track by artist {ArtistId} -> {N} results", item.ExternalId, res.Count);
                 return res;
             }
@@ -353,7 +353,7 @@ namespace Emby.Server.Implementations.Data
             if (itemtypes.Length == 0 && !query.ParentId.Equals(Guid.Empty))
             {
                 // This is the api's way to ask for an album tracks ?
-                results.Add(AlbumTracks(query.ParentId).Select(pair => pair.Item).ToList());
+                results.Add(AlbumTracks(query.ParentId).Select(pair => pair.Item).OrderBy(track => track.IndexNumber).ToList());
                 _logger.LogInformation("Query Audio Items from stpotify for album {Ids} -> {N} results", query.ParentId, results.Last().Count);
             }
 
