@@ -9,6 +9,7 @@ using System.Text.Json.Serialization;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Audio;
 using MediaBrowser.Model.Dto;
+using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
@@ -71,6 +72,11 @@ namespace Emby.Server.Implementations.Data
             public string[] Genres { get; set; }
 
             /// <summary>
+            /// Gets or sets the list of images.
+            /// </summary>
+            public Image[] Images { get; set; }
+
+            /// <summary>
             /// Fill provided base item values.
             /// </summary>
             /// <typeparam name="T">Entity type (Audio/MusicArtist/MusicAlbum,etc.).</typeparam>
@@ -103,8 +109,48 @@ namespace Emby.Server.Implementations.Data
                     item.Genres = Genres;
                 }
 
+                // Use the biggest (widest) image as primary
+                if (Images is not null && Images.Length > 0)
+                {
+                    var img = Images.OrderByDescending(i => i.Width).First();
+                    logger.LogInformation("Setting {U} : {W}x{H} as primary image", img.Url, img.Width, img.Height);
+                    item.AddImage(new ItemImageInfo { Width = img.Width, Height = img.Height, Path = img.Url, Type = ImageType.Primary });
+                }
+
+                // If we have two images, use the smallest (narrowest) as thumb
+                if (Images is not null && Images.Length > 1)
+                {
+                    var img = Images.OrderBy(i => i.Width).First();
+                    logger.LogInformation("Setting {U} : {W}x{H} as thumb image", img.Url, img.Width, img.Height);
+                    item.AddImage(new ItemImageInfo { Width = img.Width, Height = img.Height, Path = img.Url, Type = ImageType.Thumb });
+                }
+
                 return item;
             }
+        }
+
+        /// <summary>
+        /// Class Image containing spotify image data.
+        /// </summary>
+        public class Image
+        {
+            /// <summary>
+            /// Gets or sets the url.
+            /// </summary>
+            [JsonRequired]
+            public string Url { get; set; }
+
+            /// <summary>
+            /// Gets or sets the height.
+            /// </summary>
+            [JsonRequired]
+            public int Height { get; set; }
+
+            /// <summary>
+            /// Gets or sets the width.
+            /// </summary>
+            [JsonRequired]
+            public int Width { get; set; }
         }
 
         /// <summary>

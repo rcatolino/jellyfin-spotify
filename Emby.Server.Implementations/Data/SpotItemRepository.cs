@@ -115,6 +115,11 @@ namespace Emby.Server.Implementations.Data
                 parts.Add($"PersonIds : {ListToString(query.PersonIds)}");
             }
 
+            if (query.Tags.Length > 0)
+            {
+                parts.Add($"Tags : [{string.Join(", ", query.Tags)}");
+            }
+
             if (!query.ParentId.Equals(Guid.Empty))
             {
                 parts.Add($"ParentId : {query.ParentId}");
