@@ -255,9 +255,9 @@ namespace Emby.Server.Implementations.Data
         }
 
         /// <summary>
-        /// Class TopTrackList containing a list of Spotify Tracks.
+        /// Class TrackList2 containing a list of Spotify Tracks.
         /// </summary>
-        public class TopTrackList : IJSONToItems
+        public class TrackList2 : IJSONToItems
         {
             /// <summary>
             /// Gets or sets the Spotify Track List.
@@ -268,6 +268,7 @@ namespace Emby.Server.Implementations.Data
             /// <inheritdoc/>
             public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null, Guid? ownerId = null)
             {
+                // TODO: refactor with TrackList somehow.
                 var items = Tracks.Select(i =>
                     {
                         var track = i.ToItem(new Audio(), logger, parentId, ownerId);

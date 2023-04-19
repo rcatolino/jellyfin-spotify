@@ -344,6 +344,27 @@ namespace Emby.Server.Implementations.Data
             return new List<(BaseItem, ItemCounts)>();
         }
 
+        private List<(BaseItem Item, ItemCounts ItemCounts)> TracksById(User? user, Guid[] trackIds)
+        {
+            if (user is User u)
+            {
+                // TODO: This endpoint only supports up to 50 track id per request.
+                // We should deal with the case where more than 50 tracks are requested.
+                var spotIds = trackIds
+                    .Select(id => _memoryCache.Get<BaseItem>(id))
+                    .Where(item => item is BaseItem)
+                    .Select(item => item!.ExternalId) // item can't be null because of the previous where.
+                    .ToList();
+                var spotIdsStr = string.Join(",", spotIds);
+                string searchEP = $"{spotAPI}/tracks?market=FR&ids={spotIdsStr}";
+                var res = SpotQuery<SpotifyData.TrackList2>(user, searchEP);
+                _logger.LogInformation("Searching spotify for multiple tracks {T} -> {N} results", spotIdsStr, res.Count);
+                return res;
+            }
+
+            return new List<(BaseItem, ItemCounts)>();
+        }
+
         private List<(BaseItem Item, ItemCounts ItemCounts)> AlbumTracks(User? user, Guid albumId)
         {
             if (ValidateQueryData(user, albumId) is QueryData qdata)
@@ -364,7 +385,7 @@ namespace Emby.Server.Implementations.Data
             {
                 // TODO: don't hardcode market. But where to get it ?
                 string searchEP = $"{spotAPI}/artists/{qdata.Item.ExternalId}/top-tracks?market=FR";
-                var res = SpotQuery<SpotifyData.TopTrackList>(qdata.User, searchEP, artistId);
+                var res = SpotQuery<SpotifyData.TrackList2>(qdata.User, searchEP, artistId);
                 _logger.LogInformation("Searching spotify for track by artist {ArtistId} -> {N} results", qdata.Item.ExternalId, res.Count);
                 return res;
             }
@@ -451,11 +472,22 @@ namespace Emby.Server.Implementations.Data
 
             // TODO: Add limit check before each query
             var results = new List<IReadOnlyList<BaseItem>> { db_results };
-            if (itemtypes.Length == 0 && !query.ParentId.Equals(Guid.Empty))
+            if (itemtypes.Length == 0)
             {
-                // This is the api's way to ask for an album tracks ?
-                results.Add(AlbumTracks(query.User, query.ParentId).Select(pair => pair.Item).OrderBy(track => track.IndexNumber).ToList());
-                _logger.LogInformation("Query Audio Items from stpotify for album {Ids} -> {N} results", query.ParentId, results.Last().Count);
+                if (!query.ParentId.Equals(Guid.Empty))
+                {
+                    // This is the api's way to ask for an album tracks ?
+                    results.Add(AlbumTracks(query.User, query.ParentId).Select(pair => pair.Item).OrderBy(track => track.IndexNumber).ToList());
+                    _logger.LogInformation("Query Audio Items from stpotify for album {Ids} -> {N} results", query.ParentId, results.Last().Count);
+                }
+
+                if (query.ItemIds.Length > 0)
+                {
+                    results.Add(TracksById(query.User, query.ItemIds)
+                        .Select(pair => pair.Item)
+                        .ToList());
+                    _logger.LogInformation("Query Audio Items from stpotify with {Ids} -> {N} results", query.ItemIds, results.Last().Count);
+                }
             }
 
             if (itemtypes.Contains(BaseItemKind.Audio))
@@ -466,7 +498,7 @@ namespace Emby.Server.Implementations.Data
                         .Select(id => ArtistTopTracks(query.User, id).Select(pair => pair.Item))
                         .SelectMany(list => list)
                         .ToList());
-                    _logger.LogInformation("Query Audio Items from stpotify for {Ids} -> {N} results", query.ArtistIds, results.Last().Count);
+                    _logger.LogInformation("Query Audio Items from stpotify for artist {Ids} -> {N} results", query.ArtistIds, results.Last().Count);
                 }
 
                 if (query.SearchTerm is not null)
