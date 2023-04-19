@@ -16,7 +16,6 @@ using MediaBrowser.Controller.Drawing;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Persistence;
-using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Globalization;
@@ -76,6 +75,11 @@ namespace Emby.Server.Implementations.Data
         private void LogQuery(string methodName, InternalItemsQuery query, int resultCount)
         {
             List<string> parts = new List<string> { methodName };
+            if (query.User is not null)
+            {
+                parts.Add($"User {query.User.Username}");
+            }
+
             if (query.SearchTerm is not null)
             {
                 parts.Add($"Search {query.SearchTerm}");
@@ -131,7 +135,7 @@ namespace Emby.Server.Implementations.Data
                 parts.Add($"ParentId : {query.ParentId}");
             }
 
-            parts.Add($"-> {resultCount} results found");
+            parts.Add($"-> {resultCount} local results found");
             _logger.LogInformation("{Msg}", string.Join(" ", parts));
         }
 
@@ -161,7 +165,6 @@ namespace Emby.Server.Implementations.Data
                     "grant_type=client_credentials",
                     Encoding.UTF8,
                     "application/x-www-form-urlencoded");
-            // string apiToken = "apiid:apikey";
             if (apiKey is null)
             {
                 _logger.LogInformation("Spotify API key missing");
@@ -184,10 +187,6 @@ namespace Emby.Server.Implementations.Data
             else
             {
                 var jsonBody = JsonDocument.Parse(body);
-                _logger.LogInformation(
-                        "Spotify Login result : {Resp}",
-                        body);
-
                 return jsonBody.RootElement.GetProperty("access_token").GetString();
                 // _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {bearerToken}");
             }
@@ -290,7 +289,7 @@ namespace Emby.Server.Implementations.Data
                 else
                 {
                     _logger.LogInformation("Spotify query : {Q}, result : {J}", query, json);
-                    return json.ToItems(_logger, _memoryCache, parentId);
+                    return json.ToItems(_logger, _memoryCache, parentId, user.Id);
                 }
             }
             catch (System.Text.Json.JsonException e)
@@ -305,64 +304,81 @@ namespace Emby.Server.Implementations.Data
             return new List<(BaseItem, ItemCounts)>();
         }
 
-        private List<(BaseItem Item, ItemCounts ItemCounts)> ArtistAlbum(User user, Guid artistId, int limit)
+        private QueryData? ValidateQueryData(User? user, Guid itemId)
         {
-            _memoryCache.TryGetValue(artistId, out BaseItem? item);
-            if (item is not null && item.ServiceName == "spotify")
+            _memoryCache.TryGetValue(itemId, out BaseItem? item);
+            if (item is null || item.ServiceName != "spotify")
             {
-                string searchEP = $"{spotAPI}/artists/{item.ExternalId}/albums?include_groups=album&limit={limit}&market=FR";
-                var res = SpotQuery<SpotifyData.AlbumList>(user, searchEP, artistId);
-                _logger.LogInformation("Searching spotify for albums by artist {ArtistId} -> {N} results", item.ExternalId, res.Count);
-                return res;
+                _logger.LogInformation("Spotify album tracks lookup : Album {Guid} is not in cache or doesn't come from spotify", itemId);
+                return null;
             }
-            else
+
+            // If the query had no User information we can use the owner of the Album for the query.
+            // This means any user with access to the cached folder can query spotify for its track list
+            // I think thats OK.
+            if (user is null && (Guid?)item.OwnerId is not null && !item.OwnerId.Equals(Guid.Empty))
             {
-                _logger.LogInformation("Spotify artist album on spotify : Artist {Guid} is not in cache or doesn't come from spotify", artistId);
+                user = _userManager.GetUserById(item.OwnerId);
+            }
+
+            // If user is still null there was no valid owner information, we can't query spotify
+            if (user is null)
+            {
+                _logger.LogInformation("Spotify lookup : Unknown query user and no owner for item {I}", itemId);
+                return null;
+            }
+
+            return new QueryData { User = user, Item = item };
+        }
+
+        private List<(BaseItem Item, ItemCounts ItemCounts)> ArtistAlbum(User? user, Guid artistId, int limit)
+        {
+            if (ValidateQueryData(user, artistId) is QueryData qdata)
+            {
+                string searchEP = $"{spotAPI}/artists/{qdata.Item.ExternalId}/albums?include_groups=album&limit={limit}&market=FR";
+                var res = SpotQuery<SpotifyData.AlbumList>(qdata.User, searchEP, artistId);
+                _logger.LogInformation("Searching spotify for albums by artist {ArtistId} -> {N} results", qdata.Item.ExternalId, res.Count);
+                return res;
             }
 
             return new List<(BaseItem, ItemCounts)>();
         }
 
-        private List<(BaseItem Item, ItemCounts ItemCounts)> AlbumTracks(User user, Guid albumId)
+        private List<(BaseItem Item, ItemCounts ItemCounts)> AlbumTracks(User? user, Guid albumId)
         {
-            _memoryCache.TryGetValue(albumId, out BaseItem? item);
-            if (item is not null && item.ServiceName == "spotify")
+            if (ValidateQueryData(user, albumId) is QueryData qdata)
             {
                 // TODO: don't hardcode market. But where to get it ?
-                string searchEP = $"{spotAPI}/albums/{item.ExternalId}/tracks?market=FR&limit=50";
-                var res = SpotQuery<SpotifyData.TrackList>(user, searchEP, albumId);
-                _logger.LogInformation("Searching spotify for track on album {AlbumId} -> {N} results", item.ExternalId, res.Count);
+                string searchEP = $"{spotAPI}/albums/{qdata.Item.ExternalId}/tracks?market=FR&limit=50";
+                var res = SpotQuery<SpotifyData.TrackList>(qdata.User, searchEP, albumId);
+                _logger.LogInformation("Searching spotify for track on album {AlbumId} -> {N} results", qdata.Item.ExternalId, res.Count);
                 return res;
-            }
-            else
-            {
-                _logger.LogInformation("Spotify album tracks lookup : Album {Guid} is not in cache or doesn't come from spotify", albumId);
             }
 
             return new List<(BaseItem, ItemCounts)>();
         }
 
-        private List<(BaseItem Item, ItemCounts ItemCounts)> ArtistTopTracks(User user, Guid artistId)
+        private List<(BaseItem Item, ItemCounts ItemCounts)> ArtistTopTracks(User? user, Guid artistId)
         {
-            _memoryCache.TryGetValue(artistId, out BaseItem? item);
-            if (item is not null && item.ServiceName == "spotify")
+            if (ValidateQueryData(user, artistId) is QueryData qdata)
             {
                 // TODO: don't hardcode market. But where to get it ?
-                string searchEP = $"{spotAPI}/artists/{item.ExternalId}/top-tracks?market=FR";
-                var res = SpotQuery<SpotifyData.TopTrackList>(user, searchEP, artistId);
-                _logger.LogInformation("Searching spotify for track by artist {ArtistId} -> {N} results", item.ExternalId, res.Count);
+                string searchEP = $"{spotAPI}/artists/{qdata.Item.ExternalId}/top-tracks?market=FR";
+                var res = SpotQuery<SpotifyData.TopTrackList>(qdata.User, searchEP, artistId);
+                _logger.LogInformation("Searching spotify for track by artist {ArtistId} -> {N} results", qdata.Item.ExternalId, res.Count);
                 return res;
-            }
-            else
-            {
-                _logger.LogInformation("Spotify artist track lookup : Artist {Guid} is not in cache or doesn't come from spotify", artistId);
             }
 
             return new List<(BaseItem, ItemCounts)>();
         }
 
-        private List<(BaseItem Item, ItemCounts ItemCounts)> SearchSpotItem(User user, string search, string what, int limit)
+        private List<(BaseItem Item, ItemCounts ItemCounts)> SearchSpotItem(User? user, string search, string what, int limit)
         {
+            if (user is null)
+            {
+                return new List<(BaseItem, ItemCounts)>();
+            }
+
             string searchEP = $"https://api.spotify.com/v1/search?q={search}&type={what}&limit={limit}";
             _logger.LogInformation("SearchSpotItem for {N} {What} matching {Search}", limit, what, search);
             return SpotQuery<SpotifyData.SearchResponse>(user, searchEP);
@@ -373,11 +389,6 @@ namespace Emby.Server.Implementations.Data
         {
             // First, query the local database.
             QueryResult<(BaseItem, ItemCounts)> results = _backend.GetArtists(query);
-            if (query.User is null)
-            {
-                return results;
-            }
-
             LogQuery("GetArtists", query, results.TotalRecordCount);
             // Then if we are looking for more results, query spotify.
             if (query.SearchTerm is not null && results.TotalRecordCount < query.Limit)
@@ -433,12 +444,6 @@ namespace Emby.Server.Implementations.Data
         private IReadOnlyList<BaseItem> AddSpotItems(InternalItemsQuery query, IReadOnlyList<BaseItem> db_results)
         {
             var itemtypes = query.IncludeItemTypes;
-            if (query.User is null)
-            {
-                return db_results;
-            }
-
-            LogQuery("AddSpotItems", query, db_results.Count);
             if (query.Limit is not null && query.Limit < db_results.Count)
             {
                 return db_results;
@@ -511,6 +516,7 @@ namespace Emby.Server.Implementations.Data
         public List<BaseItem> GetItemList(InternalItemsQuery query)
         {
             var results = _backend.GetItemList(query);
+            LogQuery("GetItemList", query, results.Count);
             return AddSpotItems(query, results).ToList();
         }
 
@@ -518,6 +524,7 @@ namespace Emby.Server.Implementations.Data
         public QueryResult<BaseItem> GetItems(InternalItemsQuery query)
         {
             QueryResult<BaseItem> results = _backend.GetItems(query);
+            LogQuery("GetItems", query, results.TotalRecordCount);
             return new QueryResult<BaseItem>(AddSpotItems(query, results.Items));
         }
 
@@ -617,6 +624,13 @@ namespace Emby.Server.Implementations.Data
         public void UpdatePeople(Guid itemId, List<PersonInfo> people)
         {
             _backend.UpdatePeople(itemId, people);
+        }
+
+        private struct QueryData
+        {
+            public BaseItem Item;
+
+            public User User;
         }
     }
 }
