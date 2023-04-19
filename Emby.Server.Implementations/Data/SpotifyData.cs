@@ -94,7 +94,7 @@ namespace Emby.Server.Implementations.Data
                 item.ServiceName = "spotify";
                 item.ExternalId = Id;
                 item.SortName = Name;
-                item.ProviderIds = new Dictionary<string, string>() { { "spotify", Id } };
+                item.ProviderIds = new Dictionary<string, string>() { { "Spotify", Id } };
 
                 if (parentId is not null)
                 {
