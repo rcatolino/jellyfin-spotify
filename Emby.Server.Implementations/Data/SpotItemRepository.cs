@@ -350,16 +350,23 @@ namespace Emby.Server.Implementations.Data
             {
                 // TODO: This endpoint only supports up to 50 track id per request.
                 // We should deal with the case where more than 50 tracks are requested.
+                //
+                // TODO: If we have the tracks in cache, which we must have if we know their spotify ids,
+                // then why should we request them again ??
                 var spotIds = trackIds
                     .Select(id => _memoryCache.Get<BaseItem>(id))
                     .Where(item => item is BaseItem)
-                    .Select(item => item!.ExternalId) // item can't be null because of the previous where.
+                    .Where(item => item!.ServiceName == "spotify") // item can't be null because of the previous where.
+                    .Select(item => item!.ExternalId)
                     .ToList();
-                var spotIdsStr = string.Join(",", spotIds);
-                string searchEP = $"{spotAPI}/tracks?market=FR&ids={spotIdsStr}";
-                var res = SpotQuery<SpotifyData.TrackList2>(user, searchEP);
-                _logger.LogInformation("Searching spotify for multiple tracks {T} -> {N} results", spotIdsStr, res.Count);
-                return res;
+                if (spotIds.Count > 0)
+                {
+                    var spotIdsStr = string.Join(",", spotIds);
+                    string searchEP = $"{spotAPI}/tracks?market=FR&ids={spotIdsStr}";
+                    var res = SpotQuery<SpotifyData.TrackList2>(user, searchEP);
+                    _logger.LogInformation("Searching spotify for multiple tracks {T} -> {N} results", spotIdsStr, res.Count);
+                    return res;
+                }
             }
 
             return new List<(BaseItem, ItemCounts)>();
@@ -566,11 +573,22 @@ namespace Emby.Server.Implementations.Data
             return _backend.GetMediaAttachments(query);
         }
 
+        private string FormatMediaStream(MediaStream ms)
+        {
+            return $"Title {ms.Title}, Codec {ms.Codec}, Bitrate {ms.BitRate}, Type {ms.Type}, Index {ms.Index}, Url {ms.DeliveryUrl}, Method {ms.DeliveryMethod}, External : {ms.IsExternal}, ExternalUrl : {ms.IsExternalUrl}, Path : {ms.Path}";
+        }
+
         /// <inheritdoc/>
         public List<MediaStream> GetMediaStreams(MediaStreamQuery query)
         {
-            _logger.LogInformation("GetMediaStreams : {SearchTerm}", query);
-            return _backend.GetMediaStreams(query);
+            if (_memoryCache.Get<BaseItem>(query.ItemId) is BaseItem item)
+            {
+                _logger.LogInformation("GetMediaStreams : For item {G}/{IE}, type {T}, media index : {I}", query.ItemId, item.ExternalId, query.Type, query.Index);
+            }
+
+            var res = _backend.GetMediaStreams(query);
+            _logger.LogInformation("Got {N} local media streams for {I} : {M}", res.Count, query.ItemId, string.Join("\n\t", res.Select(ms => FormatMediaStream(ms))));
+            return res;
         }
 
         /// <inheritdoc/>
