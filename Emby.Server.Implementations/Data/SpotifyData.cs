@@ -42,7 +42,7 @@ namespace Emby.Server.Implementations.Data
         public class CommonData
         {
             /// <summary>
-            /// Gets or sets the Spotify Track ID.
+            /// Gets or sets the Spotify ID.
             /// </summary>
             [JsonRequired]
             public string Id { get; set; }
@@ -61,10 +61,16 @@ namespace Emby.Server.Implementations.Data
             public Dictionary<string, string> Urls { get; set; }
 
             /// <summary>
-            /// Gets or sets the Spotify Artist uri.
+            /// Gets or sets the Spotify uri.
             /// </summary>
             [JsonRequired]
             public string Uri { get; set; }
+
+            /// <summary>
+            /// Gets or sets the Spotify API href.
+            /// </summary>
+            [JsonRequired]
+            public string Href { get; set; }
 
             /// <summary>
             /// Gets or sets the genres.
@@ -95,6 +101,7 @@ namespace Emby.Server.Implementations.Data
                 item.ExternalId = Id;
                 item.SortName = Name;
                 item.ProviderIds = new Dictionary<string, string>() { { "Spotify", Id } };
+                item.Path = Href;
 
                 if (parentId is not null)
                 {

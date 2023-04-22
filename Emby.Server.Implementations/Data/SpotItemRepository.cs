@@ -466,6 +466,7 @@ namespace Emby.Server.Implementations.Data
         public List<Guid> GetItemIdsList(InternalItemsQuery query)
         {
             List<Guid> results = _backend.GetItemIdsList(query);
+            _logger.LogInformation("GetItemIdsList {@InternalItemsQuery} : {@List}", query, results);
             return results;
         }
 
@@ -570,7 +571,10 @@ namespace Emby.Server.Implementations.Data
         /// <inheritdoc/>
         public List<MediaAttachment> GetMediaAttachments(MediaAttachmentQuery query)
         {
-            return _backend.GetMediaAttachments(query);
+            // I think this is for stuff like subtitles
+            var res = _backend.GetMediaAttachments(query);
+            // _logger.LogInformation("GetMediaAttachments {@MediaAttachmentQuery} - Got {N} results : {@List<MediaAttachment>}", query, res.Count, res);
+            return res;
         }
 
         private string FormatMediaStream(MediaStream ms)
@@ -581,13 +585,25 @@ namespace Emby.Server.Implementations.Data
         /// <inheritdoc/>
         public List<MediaStream> GetMediaStreams(MediaStreamQuery query)
         {
+            var res = _backend.GetMediaStreams(query);
             if (_memoryCache.Get<BaseItem>(query.ItemId) is BaseItem item)
             {
                 _logger.LogInformation("GetMediaStreams : For item {G}/{IE}, type {T}, media index : {I}", query.ItemId, item.ExternalId, query.Type, query.Index);
+                if (item.ServiceName == "spotify")
+                {
+                    var stream = new MediaStream
+                    {
+                        Codec = "spotify",
+                        Type = MediaStreamType.Audio,
+                        Index = res.Count,
+                        IsExternal = true,
+                        Path = item.Path, // If we omit the path the MediaStream gets filtered out in BaseItem.GetVersionInfo
+                    };
+                    res.Add(stream);
+                }
             }
 
-            var res = _backend.GetMediaStreams(query);
-            _logger.LogInformation("Got {N} local media streams for {I} : {M}", res.Count, query.ItemId, string.Join("\n\t", res.Select(ms => FormatMediaStream(ms))));
+            _logger.LogInformation("Got {N} media streams for {I} : {M}", res.Count, query.ItemId, string.Join("\n\t", res.Select(ms => FormatMediaStream(ms))));
             return res;
         }
 
