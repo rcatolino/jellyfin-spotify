@@ -103,6 +103,11 @@ namespace MediaBrowser.Model.Dto
         /// <value>The primary image aspect ratio.</value>
         public double? PrimaryImageAspectRatio { get; set; }
 
+        /// <summary>
+        /// Gets or sets session spotify access token the user.
+        /// </summary>
+        public string SpotifyToken { get; set; }
+
         /// <inheritdoc />
         public override string ToString()
         {

@@ -596,7 +596,7 @@ namespace Emby.Server.Implementations.Data
                         Codec = "spotify",
                         Type = MediaStreamType.Audio,
                         Index = res.Count,
-                        IsExternal = true,
+                        // IsExternal = true, // This is for subtitles ?
                         Path = item.Path, // If we omit the path the MediaStream gets filtered out in BaseItem.GetVersionInfo
                     };
                     res.Add(stream);

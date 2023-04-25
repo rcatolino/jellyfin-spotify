@@ -1,4 +1,4 @@
-﻿#pragma warning disable CA1307
+#pragma warning disable CA1307
 
 using System;
 using System.Collections.Concurrent;
@@ -320,6 +320,7 @@ namespace Jellyfin.Server.Implementations.Users
                 LastLoginDate = user.LastLoginDate,
                 LastActivityDate = user.LastActivityDate,
                 PrimaryImageTag = user.ProfileImage is not null ? _imageProcessor.GetImageCacheTag(user) : null,
+                SpotifyToken = user.SpotifyToken,
                 Configuration = new UserConfiguration
                 {
                     SubtitleMode = user.SubtitleMode,
