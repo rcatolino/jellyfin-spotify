@@ -68,9 +68,19 @@ namespace Jellyfin.Data.Entities
         public string? SpotifyApiKey { get; set; }
 
         /// <summary>
-        /// Gets or sets session spotify access token for the user.
+        /// Gets or sets spotify access token for the user (metadata api).
         /// </summary>
         public string? SpotifyToken { get; set; }
+
+        /// <summary>
+        /// Gets or sets session spotify access token for the user (web playback api).
+        /// </summary>
+        public string? SpotifyWPToken { get; set; }
+
+        /// <summary>
+        /// Gets or sets session spotify refresh token for the user (web playback api).
+        /// </summary>
+        public string? SpotifyRefreshToken { get; set; }
 
         /// <summary>
         /// Gets or sets the Id of the user.
