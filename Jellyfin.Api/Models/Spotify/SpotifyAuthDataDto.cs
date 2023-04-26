@@ -6,16 +6,12 @@ namespace Jellyfin.Api.Models;
 public class SpotifyAuthDataDto
 {
     /// <summary>
-    /// Initializes a new instance of the <see cref="SpotifyAuthDataDto"/> class.
+    /// Gets or sets spotify access token for a user.
     /// </summary>
-    /// <param name="accessToken">spotify access token.</param>
-    public SpotifyAuthDataDto(string accessToken)
-    {
-        AccessToken = accessToken;
-    }
+    public string? AccessToken { get; set; }
 
     /// <summary>
-    /// Gets spotify clientID for a user.
+    /// Gets or sets spotify redirectURL for a user.
     /// </summary>
-    public string AccessToken { get; }
+    public string? RedirectURL { get; set; }
 }

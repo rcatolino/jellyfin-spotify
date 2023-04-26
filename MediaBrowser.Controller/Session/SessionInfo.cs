@@ -51,11 +51,6 @@ namespace MediaBrowser.Controller.Session
         public ClientCapabilities Capabilities { get; set; }
 
         /// <summary>
-        /// Gets or sets the spotify auth state for the session.
-        /// </summary>
-        public string SpotifyAuthState { get; set; }
-
-        /// <summary>
         /// Gets or sets the remote end point.
         /// </summary>
         /// <value>The remote end point.</value>
