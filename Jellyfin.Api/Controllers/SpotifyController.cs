@@ -121,10 +121,9 @@ public class SpotifyController : BaseJellyfinApiController
             return NotFound("Spotify API error");
         }
 
-        var newRefresh = jsonBody.RootElement.GetProperty("refresh_token").GetString();
-        if (newRefresh is not null)
+        if (jsonBody.RootElement.TryGetProperty("refresh_token", out var newRefresh))
         {
-            user.SpotifyWPToken = newRefresh;
+            user.SpotifyWPToken = newRefresh.GetString();
         }
 
         return Ok(new SpotifyAuthDataDto { AccessToken = user.SpotifyWPToken });
