@@ -261,6 +261,19 @@ namespace Emby.Server.Implementations.Data
             requestMessage.Headers.Add("Authorization", "Bearer " + user.SpotifyToken);
             HttpResponseMessage resp = await _httpClient.SendAsync(requestMessage);
             string body = await resp.Content.ReadAsStringAsync();
+            if (resp.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                user.SpotifyToken = null;
+                if (retry)
+                {
+                    return await AsyncSpotQuery<T>(user, query, parentId, false);
+                }
+            }
+            else if (resp.StatusCode != HttpStatusCode.OK)
+            {
+                _logger.LogWarning("Spotify search failed with code {Code} : {Text}", resp.StatusCode, body);
+            }
+
             try
             {
                 var json = JsonSerializer.Deserialize<T>(body, new JsonSerializerOptions
@@ -272,19 +285,6 @@ namespace Emby.Server.Implementations.Data
                 {
                     _logger.LogWarning("Error deserializing Spotify data {Data}", body);
                     return new List<(BaseItem, ItemCounts)>();
-                }
-
-                if (resp.StatusCode == HttpStatusCode.Unauthorized)
-                {
-                    user.SpotifyToken = null;
-                    if (retry)
-                    {
-                        return await AsyncSpotQuery<T>(user, query, parentId, false);
-                    }
-                }
-                else if (resp.StatusCode != HttpStatusCode.OK)
-                {
-                    _logger.LogWarning("Spotify search failed with code {Code} : {Text}", resp.StatusCode, body);
                 }
                 else
                 {

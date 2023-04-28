@@ -79,10 +79,16 @@ public class SpotifyController : BaseJellyfinApiController
             return NotFound("User not found");
         }
 
-        if (user.SpotifyApiKey is null || user.SpotifyRefreshToken is null)
+        if (user.SpotifyApiKey is null)
         {
             _logger.LogWarning("Cannot refresh spotify token because no API key or RefreshToken is availaible for this user");
             return NotFound("Missing API key or RefreshToken");
+        }
+
+        if (user.SpotifyRefreshToken is null)
+        {
+            // We don't have any refresh token, we must login
+            return LoginRedirect(user.SpotifyApiKey, user.Id);
         }
 
         var requestMessage = new HttpRequestMessage(HttpMethod.Post, "https://accounts.spotify.com/api/token");
@@ -96,13 +102,18 @@ public class SpotifyController : BaseJellyfinApiController
         requestMessage.Headers.Add("Authorization", "Basic " + authToken);
         var resp = await _httpClient.SendAsync(requestMessage).ConfigureAwait(false);
         string body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
-        if (resp.StatusCode != HttpStatusCode.OK)
+        var jsonBody = JsonDocument.Parse(body);
+        if (resp.StatusCode == HttpStatusCode.BadRequest && jsonBody.RootElement.GetProperty("error").GetString() == "invalid_grant")
+        {
+            // The refresh token isn't valid anymore, we must login
+            return LoginRedirect(user.SpotifyApiKey, user.Id);
+        }
+        else if (resp.StatusCode != HttpStatusCode.OK)
         {
             _logger.LogWarning("Failed to refresh spotify token, code {Code} : {Text}", resp.StatusCode, body);
             return NotFound("Spotify API error");
         }
 
-        var jsonBody = JsonDocument.Parse(body);
         user.SpotifyWPToken = jsonBody.RootElement.GetProperty("access_token").GetString();
         if (user.SpotifyWPToken is null)
         {
@@ -119,17 +130,30 @@ public class SpotifyController : BaseJellyfinApiController
         return Ok(new SpotifyAuthDataDto { AccessToken = user.SpotifyWPToken });
     }
 
+    private ActionResult<SpotifyAuthDataDto> LoginRedirect(string apiKey, Guid userId)
+    {
+        var rand = new Random();
+        var state_bytes = new byte[16];
+        rand.NextBytes(state_bytes);
+        var state = Convert.ToBase64String(state_bytes);
+        var clientId = apiKey.Split(':')[0];
+        _logger.LogInformation("Spotify Login Prep, setting state {S} for user {U}", state, userId);
+        _memoryCache.Set(state, userId, new TimeSpan(0, 5, 0)); // We need to save the state somewhere for the verification in SpotifyAuthCallback
+        var redirect = HttpUtility.UrlEncode($"http://localhost:8096/Spotify/AuthCallback");
+        var scopes = HttpUtility.UrlEncode("streaming user-read-email user-read-private user-modify-playback-state");
+        var url = $"client_id={clientId}&response_type=code&redirect_uri={redirect}&state={HttpUtility.UrlEncode(state)}&scope={scopes}";
+        return Ok(new SpotifyAuthDataDto { RedirectURL = $"https://accounts.spotify.com/authorize?{url}" });
+    }
+
      /// <summary>
     /// Gets an access token for spotify web playback.
     /// </summary>
     /// <response code="200">Data returned.</response>
-    /// <response code="302">Redirect to spotify auth page.</response>
     /// <response code="404">No clientID available for this session or session not found.</response>
     /// <returns>An <see cref="IEnumerable{UserDto}"/> containing the sessions.</returns>
     [HttpGet("AccessToken")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status302Found)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<SpotifyAuthDataDto>> GetAccessToken()
     {
@@ -141,7 +165,7 @@ public class SpotifyController : BaseJellyfinApiController
         }
 
         var user = _userManager.GetUserById(session.UserId);
-        if (user is null)
+        if (user is null || user.Id.Equals(Guid.Empty))
         {
             return NotFound("User not found");
         }
@@ -153,17 +177,7 @@ public class SpotifyController : BaseJellyfinApiController
 
         if (user.SpotifyApiKey is string key)
         {
-            // We don't have any access token, but we have an API key, perform oauth authorization
-            var rand = new Random();
-            var state_bytes = new byte[16];
-            rand.NextBytes(state_bytes);
-            var state = Convert.ToBase64String(state_bytes);
-            var clientId = key.Split(':')[0];
-            _memoryCache.Set(state, user.Id, new TimeSpan(0, 5, 0)); // We need to save the state somewhere for the verification in SpotifyAuthCallback
-            var redirect = HttpUtility.UrlEncode($"http://localhost:8096/Spotify/AuthCallback");
-            var scopes = HttpUtility.UrlEncode("streaming user-read-email user-read-private");
-            var url = $"client_id={clientId}&response_type=code&redirect_uri={redirect}&state={HttpUtility.UrlEncode(state)}&scope={scopes}";
-            return Ok(new SpotifyAuthDataDto { RedirectURL = $"https://accounts.spotify.com/authorize?{url}" });
+            return LoginRedirect(key, user.Id);
         }
 
         return NotFound("No API key available for user");
@@ -188,9 +202,9 @@ public class SpotifyController : BaseJellyfinApiController
     {
         var decoded_state = HttpUtility.UrlDecode(state);
         Guid? userId = _memoryCache.Get<Guid>(decoded_state);
-        if (userId is null)
+        if (userId is null || userId.Equals(Guid.Empty))
         {
-            _logger.LogInformation("Spotify OAuth callback, state check failed for {S}", decoded_state);
+            _logger.LogInformation("Spotify OAuth callback, state check failed for {S}. UserId is {U}", decoded_state, userId);
             return NotFound("State check failed");
         }
 
@@ -242,6 +256,6 @@ public class SpotifyController : BaseJellyfinApiController
         var jsonBody = JsonDocument.Parse(body);
         user.SpotifyWPToken = jsonBody.RootElement.GetProperty("access_token").GetString();
         user.SpotifyRefreshToken = jsonBody.RootElement.GetProperty("refresh_token").GetString();
-        return Redirect("/web/index.html");
+        return Redirect("/web/index.html"); // TODO: redirect at previous location
     }
 }
