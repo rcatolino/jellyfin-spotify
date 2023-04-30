@@ -14,6 +14,7 @@ using MediaBrowser.Controller;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Drawing;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.Audio;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Model.Dto;
@@ -355,43 +356,61 @@ namespace Emby.Server.Implementations.Data
             return new List<(BaseItem, ItemCounts)>();
         }
 
-        private List<(BaseItem Item, ItemCounts ItemCounts)> TracksById(User? user, Guid[] trackIds)
+        private List<BaseItem> TracksById(Guid[] trackIds)
         {
-            if (user is User u)
-            {
-                // TODO: This endpoint only supports up to 50 track id per request.
-                // We should deal with the case where more than 50 tracks are requested.
-                //
-                // TODO: If we have the tracks in cache, which we must have if we know their spotify ids,
-                // then why should we request them again ??
-                var spotIds = trackIds
-                    .Select(id => _memoryCache.Get<BaseItem>(id))
-                    .Where(item => item is BaseItem)
-                    .Where(item => item!.ServiceName == "spotify") // item can't be null because of the previous where.
-                    .Select(item => item!.ExternalId)
-                    .ToList();
-                if (spotIds.Count > 0)
-                {
-                    var spotIdsStr = string.Join(",", spotIds);
-                    string searchEP = $"{spotAPI}/tracks?market=FR&ids={spotIdsStr}";
-                    var res = SpotQuery<SpotifyData.TrackList2>(user, searchEP);
-                    _logger.LogInformation("Searching spotify for multiple tracks {T} -> {N} results", spotIdsStr, res.Count);
-                    return res;
-                }
-            }
+            var tracks = trackIds
+                .Select(id => _memoryCache.Get<BaseItem>(id))
+                .Where(item => item is BaseItem && item.ServiceName == "spotify")
+                .Select(item => item!)
+                .ToList();
+            return tracks;
+        }
 
-            return new List<(BaseItem, ItemCounts)>();
+        private void LinkTracks(Folder album, List<BaseItem> tracks)
+        {
+            album.LinkedChildren = tracks
+                .Where(t => t is Audio)
+                .Select(t =>
+                    {
+                        var newChild = LinkedChild.Create(t);
+                        newChild.ItemId = t.Id; // Save the original item id
+                        newChild.LibraryItemId = t.ExternalId; // Save the spotify id
+                        return newChild;
+                    })
+                .ToArray();
         }
 
         private List<(BaseItem Item, ItemCounts ItemCounts)> AlbumTracks(User? user, Guid albumId)
         {
-            if (ValidateQueryData(user, albumId) is QueryData qdata)
+            if (ValidateQueryData(user, albumId) is QueryData qdata && qdata.Item is Folder folder)
             {
+                _logger.LogInformation("Album {AName} already has {C} linked tracks", folder.Name, folder.LinkedChildren.Length);
+                if (folder.LinkedChildren.Length > 0)
+                {
+                    // First see if we have the tracks still in cache
+                    var cachedTracks = folder.LinkedChildren
+                        .Where(child => child.ItemId is not null)
+                        .Select(child =>
+                            {
+                                _memoryCache.TryGetValue(child.ItemId!, out BaseItem? item);
+                                return item;
+                            })
+                        .Where(item => item is Audio)
+                        .Select(item => (item!, new ItemCounts { SongCount = 1 }))
+                        .ToList();
+                    if (cachedTracks.Count == folder.LinkedChildren.Length)
+                    {
+                        _logger.LogInformation("All {C} linked tracks for album {AName} are still in cache, not querying spotify", cachedTracks.Count);
+                        return cachedTracks;
+                    }
+                }
+
+                _logger.LogInformation("Searching for tracks on album {AName} {AId}", folder.Name, folder.ExternalId);
                 // TODO: don't hardcode market. But where to get it ?
-                _logger.LogInformation("Searching for tracks on album {AName} {AId}", qdata.Item.Name, qdata.Item.ExternalId);
-                string searchEP = $"{spotAPI}/albums/{qdata.Item.ExternalId}/tracks?market=FR&limit=50";
+                string searchEP = $"{spotAPI}/albums/{folder.ExternalId}/tracks?market=FR&limit=50";
                 var res = SpotQuery<SpotifyData.TrackList>(qdata.User, searchEP, albumId);
-                _logger.LogInformation("Searching spotify for track on album {AlbumId} -> {N} results", qdata.Item.ExternalId, res.Count);
+                LinkTracks(folder, res.Select(i => i.Item).ToList());
+                _logger.LogInformation("Searching spotify for track on album {AlbumId} -> {N} results", folder.ExternalId, res.Count);
                 return res;
             }
 
@@ -503,10 +522,8 @@ namespace Emby.Server.Implementations.Data
 
                 if (query.ItemIds.Length > 0)
                 {
-                    results.Add(TracksById(query.User, query.ItemIds)
-                        .Select(pair => pair.Item)
-                        .ToList());
-                    _logger.LogInformation("Query Audio Items from stpotify with {Ids} -> {N} results", query.ItemIds, results.Last().Count);
+                    results.Add(TracksById(query.ItemIds));
+                    _logger.LogInformation("Query Audio Items for user {U} from stpotify with ids {Ids} -> {N} results", query.User, query.ItemIds, results.Last().Count);
                 }
             }
 
