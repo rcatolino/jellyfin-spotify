@@ -85,9 +85,20 @@ namespace Emby.Server.Implementations.Data
                 parts.Add($"Search {query.SearchTerm}");
             }
 
+            parts.Add($"Recursive {query.Recursive}");
             if (query.Limit is not null)
             {
                 parts.Add($"limit {query.Limit}");
+            }
+
+            if (query.IsFolder is not null)
+            {
+                parts.Add($"IsFolder {query.IsFolder}");
+            }
+
+            if (query.MediaTypes is not null)
+            {
+                parts.Add($"MediaTypes {string.Join(", ", query.MediaTypes)}");
             }
 
             if (query.IncludeItemTypes.Length > 0)
@@ -102,7 +113,7 @@ namespace Emby.Server.Implementations.Data
 
             if (query.AncestorIds.Length > 0)
             {
-                parts.Add($"AlbumArtistIds : {ListToString(query.AlbumArtistIds)}");
+                parts.Add($"AncestorIds : {ListToString(query.AncestorIds)}");
             }
 
             if (query.AlbumIds.Length > 0)
@@ -377,6 +388,7 @@ namespace Emby.Server.Implementations.Data
             if (ValidateQueryData(user, albumId) is QueryData qdata)
             {
                 // TODO: don't hardcode market. But where to get it ?
+                _logger.LogInformation("Searching for tracks on album {AName} {AId}", qdata.Item.Name, qdata.Item.ExternalId);
                 string searchEP = $"{spotAPI}/albums/{qdata.Item.ExternalId}/tracks?market=FR&limit=50";
                 var res = SpotQuery<SpotifyData.TrackList>(qdata.User, searchEP, albumId);
                 _logger.LogInformation("Searching spotify for track on album {AlbumId} -> {N} results", qdata.Item.ExternalId, res.Count);
@@ -466,7 +478,7 @@ namespace Emby.Server.Implementations.Data
         public List<Guid> GetItemIdsList(InternalItemsQuery query)
         {
             List<Guid> results = _backend.GetItemIdsList(query);
-            _logger.LogInformation("GetItemIdsList {@InternalItemsQuery} : {@List}", query, results);
+            LogQuery("GetItemIdsList", query, results.Count);
             return results;
         }
 
@@ -498,7 +510,7 @@ namespace Emby.Server.Implementations.Data
                 }
             }
 
-            if (itemtypes.Contains(BaseItemKind.Audio))
+            if (itemtypes.Contains(BaseItemKind.Audio) || query.MediaTypes.Contains(MediaType.Audio))
             {
                 if (query.ArtistIds.Length > 0)
                 {
@@ -507,6 +519,16 @@ namespace Emby.Server.Implementations.Data
                         .SelectMany(list => list)
                         .ToList());
                     _logger.LogInformation("Query Audio Items from stpotify for artist {Ids} -> {N} results", query.ArtistIds, results.Last().Count);
+                }
+
+                if (query.AncestorIds.Length > 0)
+                {
+                    results.Add(query.AncestorIds
+                        .Select(id => AlbumTracks(query.User, id).Select(pair => pair.Item))
+                        .SelectMany(list => list)
+                        // .OrderBy(track => track.IndexNumber)
+                        .ToList());
+                    _logger.LogInformation("Query Audio Items from stpotify for albums {Ids} -> {N} results", query.AncestorIds, results.Last().Count);
                 }
 
                 if (query.SearchTerm is not null)
@@ -646,7 +668,7 @@ namespace Emby.Server.Implementations.Data
         /// <inheritdoc/>
         public BaseItem RetrieveItem(Guid id)
         {
-            _logger.LogInformation("RetrieveItem: {Id}", id);
+            // _logger.LogInformation("RetrieveItem: {Id}", id);
             return _backend.RetrieveItem(id);
         }
 

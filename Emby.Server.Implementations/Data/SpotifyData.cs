@@ -239,7 +239,7 @@ namespace Emby.Server.Implementations.Data
         public class TrackList : IJSONToItems
         {
             /// <summary>
-            /// Gets or sets the Spotify Album List.
+            /// Gets or sets the Spotify Track List.
             /// </summary>
             [JsonRequired]
             public Track[] Items { get; set; }
