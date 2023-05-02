@@ -97,7 +97,7 @@ namespace Emby.Server.Implementations.Data
                 parts.Add($"IsFolder {query.IsFolder}");
             }
 
-            if (query.MediaTypes is not null)
+            if (query.MediaTypes.Length > 0)
             {
                 parts.Add($"MediaTypes {string.Join(", ", query.MediaTypes)}");
             }

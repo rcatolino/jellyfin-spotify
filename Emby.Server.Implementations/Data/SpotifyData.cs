@@ -86,17 +86,27 @@ namespace Emby.Server.Implementations.Data
             /// <summary>
             /// Fill provided base item values.
             /// </summary>
-            /// <typeparam name="T">Entity type (Audio/MusicArtist/MusicAlbum,etc.).</typeparam>
-            /// <param name="item">BaseItem.</param>
             /// <param name="logger">Logger.</param>
+            /// <param name="memoryCache">MemoryCache.</param>
             /// <param name="parentId">ID of parent Album/Artist if there is one.</param>
             /// <param name="ownerId">ID of the user who has requested this metadata from spotify.</param>
             /// <returns> The BaseItem with filled values.</returns>
-            public T ToItem<T>(T item, ILogger logger, Guid? parentId = null, Guid? ownerId = null)
-                where T : BaseItem
+            public virtual BaseItem ToItem(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null, Guid? ownerId = null)
+            {
+                return new Audio();
+            }
+
+            /// <summary>
+            /// Fill provided base item values.
+            /// </summary>
+            /// <param name="item">BaseItem.</param>
+            /// <param name="parentId">ID of parent Album/Artist if there is one.</param>
+            /// <param name="ownerId">ID of the user who has requested this metadata from spotify.</param>
+            /// <returns> The BaseItem with filled values.</returns>
+            public BaseItem BaseToItem(BaseItem item, Guid? parentId = null, Guid? ownerId = null)
             {
                 item.Name = Name;
-                item.Id = Base62.B62ToGuid(Id, logger);
+                item.Id = Base62.B62ToGuid(Id);
                 item.ServiceName = "spotify";
                 item.ExternalId = Id;
                 item.SortName = Name;
@@ -127,7 +137,6 @@ namespace Emby.Server.Implementations.Data
                 if (Images is not null && Images.Length > 0)
                 {
                     var img = Images.OrderByDescending(i => i.Width).First();
-                    // logger.LogInformation("Setting {U} : {W}x{H} as primary image", img.Url, img.Width, img.Height);
                     item.AddImage(new ItemImageInfo { Width = img.Width, Height = img.Height, Path = img.Url, Type = ImageType.Primary });
                 }
 
@@ -135,7 +144,6 @@ namespace Emby.Server.Implementations.Data
                 if (Images is not null && Images.Length > 1)
                 {
                     var img = Images.OrderBy(i => i.Width).First();
-                    // logger.LogInformation("Setting {U} : {W}x{H} as thumb image", img.Url, img.Width, img.Height);
                     item.AddImage(new ItemImageInfo { Width = img.Width, Height = img.Height, Path = img.Url, Type = ImageType.Thumb });
                 }
 
@@ -191,6 +199,25 @@ namespace Emby.Server.Implementations.Data
             [JsonRequired]
             [JsonPropertyName("release_date")]
             public string ReleaseDate { get; set; }
+
+            /// <inheritdoc/>
+            public override BaseItem ToItem(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null, Guid? ownerId = null)
+            {
+                var album = new MusicAlbum();
+                BaseToItem(album, parentId, ownerId);
+                // album.TrackCount = TrackCount;
+                album.Artists = Artists.Select(a => a.Name).ToList();
+                try
+                {
+                    album.ProductionYear = int.Parse(ReleaseDate.Split("-")[0], new CultureInfo("en-US"));
+                }
+                catch
+                {
+                }
+
+                memoryCache.Set(album.Id, album, new TimeSpan(1, 0, 0));
+                return album;
+            }
         }
 
         /// <summary>
@@ -224,6 +251,20 @@ namespace Emby.Server.Implementations.Data
             [JsonRequired]
             [JsonPropertyName("disc_number")]
             public int DiscNumber { get; set; }
+
+            /// <inheritdoc/>
+            public override BaseItem ToItem(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null, Guid? ownerId = null)
+            {
+                var track = new Audio();
+                BaseToItem(track, parentId, ownerId);
+                track.SortName = $"{DiscNumber:D3}-{TrackNumber:D3}-{track.SortName}";
+                track.IndexNumber = TrackNumber;
+                track.ParentIndexNumber = DiscNumber;
+                track.RunTimeTicks = DurationMs * 10000;
+                track.Artists = Artists.Select(a => a.Name).ToList();
+                memoryCache.Set(track.Id, track, new TimeSpan(1, 0, 0));
+                return track;
+            }
         }
 
         /// <summary>
@@ -231,6 +272,14 @@ namespace Emby.Server.Implementations.Data
         /// </summary>
         public class Artist : CommonData
         {
+            /// <inheritdoc/>
+            public override BaseItem ToItem(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null, Guid? ownerId = null)
+            {
+                var artist = new MusicArtist();
+                BaseToItem(artist, parentId, ownerId);
+                memoryCache.Set(artist.Id, artist, new TimeSpan(1, 0, 0));
+                return artist;
+            }
         }
 
         /// <summary>
@@ -248,15 +297,7 @@ namespace Emby.Server.Implementations.Data
             public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null, Guid? ownerId = null)
             {
                 var items = Items.Select(i =>
-                    {
-                        var track = i.ToItem(new Audio(), logger, parentId, ownerId);
-                        track.IndexNumber = i.TrackNumber;
-                        track.ParentIndexNumber = i.DiscNumber;
-                        track.RunTimeTicks = i.DurationMs * 10000;
-                        track.Artists = i.Artists.Select(a => a.Name).ToList();
-                        memoryCache.Set(track.Id, track, new TimeSpan(1, 0, 0));
-                        return ((BaseItem)track, new ItemCounts { SongCount = 1 });
-                    });
+                        (i.ToItem(logger, memoryCache, parentId, ownerId), new ItemCounts { SongCount = 1 }));
                 return items.ToList();
             }
         }
@@ -275,17 +316,8 @@ namespace Emby.Server.Implementations.Data
             /// <inheritdoc/>
             public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null, Guid? ownerId = null)
             {
-                // TODO: refactor with TrackList somehow.
                 var items = Tracks.Select(i =>
-                    {
-                        var track = i.ToItem(new Audio(), logger, parentId, ownerId);
-                        track.IndexNumber = i.TrackNumber;
-                        track.ParentIndexNumber = i.DiscNumber;
-                        track.RunTimeTicks = i.DurationMs * 10000;
-                        track.Artists = i.Artists.Select(a => a.Name).ToList();
-                        memoryCache.Set(track.Id, track, new TimeSpan(1, 0, 0));
-                        return ((BaseItem)track, new ItemCounts { SongCount = 1 });
-                    });
+                        (i.ToItem(logger, memoryCache, parentId, ownerId), new ItemCounts { SongCount = 1 }));
                 return items.ToList();
             }
         }
@@ -311,20 +343,7 @@ namespace Emby.Server.Implementations.Data
             public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null, Guid? ownerId = null)
             {
                 var items = Items.Select(i =>
-                    {
-                        var album = i.ToItem(new MusicAlbum(), logger, parentId, ownerId);
-                        album.Artists = i.Artists.Select(a => a.Name).ToList();
-                        try
-                        {
-                            album.ProductionYear = int.Parse(i.ReleaseDate.Split("-")[0], new CultureInfo("en-US"));
-                        }
-                        catch
-                        {
-                        }
-
-                        memoryCache.Set(album.Id, album, new TimeSpan(1, 0, 0));
-                        return ((BaseItem)album, new ItemCounts { AlbumCount = 1 });
-                    });
+                        (i.ToItem(logger, memoryCache, parentId, ownerId), new ItemCounts { AlbumCount = 1 }));
                 return items.ToList();
             }
         }
@@ -344,14 +363,7 @@ namespace Emby.Server.Implementations.Data
             public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null, Guid? ownerId = null)
             {
                 var items = Items.Select(i =>
-                    {
-                        var artist = i.ToItem(new MusicArtist(), logger, parentId, ownerId);
-                        memoryCache.Set(artist.Id, artist, new TimeSpan(1, 0, 0));
-                        // We need to keep this artist in cache in order to be able to answer future artist queries by ID :
-                        // we can't always query spotify with the GUID as it doesn't always map to the spotify ID.
-                        // But we don't need to keep it forever as it should be saved in the database if we actually listen to it
-                        return ((BaseItem)artist, new ItemCounts { ArtistCount = 1 });
-                    });
+                        (i.ToItem(logger, memoryCache, parentId, ownerId), new ItemCounts { ArtistCount = 1 }));
                 return items.ToList();
             }
         }
@@ -365,7 +377,7 @@ namespace Emby.Server.Implementations.Data
             /// Generates a GUID from a spotify ID.
             /// Warning : this is not a always a lossless operation as not all spotify IDs fit in 16 bytes.
             /// </summary>
-            public static Guid B62ToGuid(string base62String, ILogger logger)
+            public static Guid B62ToGuid(string base62String)
             {
                 var value = new BigInteger(0);
                 foreach (var c in base62String)
@@ -380,7 +392,6 @@ namespace Emby.Server.Implementations.Data
                 // In this case we just remove the MSB, the original id will be stored in the ExternalId anyway and the MusicArtist is kept in cache.
                 if (byteArray.Length == 17)
                 {
-                    logger.LogInformation("Spotify 17 byte ID {SpotID} : {Hex}", base62String, byteArray);
                     return new Guid(new ArraySegment<byte>(byteArray, 1, byteArray.Length - 1));
                 }
                 else if (byteArray.Length < 16)
@@ -392,31 +403,6 @@ namespace Emby.Server.Implementations.Data
 
                 return new Guid(byteArray);
             }
-        }
-
-        private class InvalidBase62Decoder : Exception
-        {
-            public InvalidBase62Decoder()
-            {
-            }
-        }
-
-        /// <summary>
-        /// Class Error containing a Spotify error result.
-        /// </summary>
-        public class Error
-        {
-            /// <summary>
-            /// Gets or sets the http status.
-            /// </summary>
-            [JsonRequired]
-            public int Status { get; set; }
-
-            /// <summary>
-            /// Gets or sets the error message.
-            /// </summary>
-            [JsonRequired]
-            public string Message { get; set; }
         }
 
         /// <summary>
@@ -438,11 +424,6 @@ namespace Emby.Server.Implementations.Data
             /// Gets or sets the list of albums.
             /// </summary>
             public AlbumList Albums { get; set; }
-
-            /// <summary>
-            /// Gets or sets spotify error.
-            /// </summary>
-            public Error Error { get; set; }
 
             /// <inheritdoc/>
             public List<(BaseItem Items, ItemCounts Counts)> ToItems(ILogger logger, IMemoryCache memoryCache, Guid? parentId = null, Guid? ownerId = null)
