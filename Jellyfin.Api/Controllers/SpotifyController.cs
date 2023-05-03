@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
-using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -144,12 +143,92 @@ public class SpotifyController : BaseJellyfinApiController
         return Ok(new SpotifyAuthDataDto { RedirectURL = $"https://accounts.spotify.com/authorize?{url}" });
     }
 
-     /// <summary>
+    /// <summary>
+    /// Sets an API app ID/Key for spotify web playback.
+    /// </summary>
+    /// <param name="apiParams">Json object containing the ID and the key in the apiId et apiKey fields.</param>
+    /// <response code="200">API Key validation result.</response>
+    /// <response code="404">Session/User not found.</response>
+    /// <returns>A boolean indicating if the key is valid.</returns>
+    [HttpPost("ApiId")]
+    [Authorize]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<bool>> SetApiKey([FromBody, Required] JsonDocument apiParams)
+    {
+        var session = await RequestHelpers.GetSession(_sessionManager, _userManager, HttpContext).ConfigureAwait(false);
+        _logger.LogInformation("Get spotify authorization data for session {Id}", session.Id);
+        if (session is null)
+        {
+            return NotFound("Session not found");
+        }
+
+        var user = _userManager.GetUserById(session.UserId);
+        if (user is null || user.Id.Equals(Guid.Empty))
+        {
+            return NotFound("User not found");
+        }
+
+        var apiId = apiParams.RootElement.GetProperty("apiId").GetString();
+        var apiKey = apiParams.RootElement.GetProperty("apiKey").GetString();
+        var spotifyKey = $"{apiId}:{apiKey}";
+
+        // Try this key before saving it
+        string authToken = Convert.ToBase64String(Encoding.UTF8.GetBytes(spotifyKey));
+        var requestMessage = new HttpRequestMessage(HttpMethod.Post, "https://accounts.spotify.com/api/token");
+        requestMessage.Content = new StringContent("grant_type=client_credentials", Encoding.UTF8, "application/x-www-form-urlencoded");
+        requestMessage.Headers.Add("Authorization", "Basic " + authToken);
+        HttpResponseMessage resp = await _httpClient.SendAsync(requestMessage).ConfigureAwait(false);
+        string body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+        if (resp.StatusCode != HttpStatusCode.OK)
+        {
+            _logger.LogWarning("Spotify API Key validation failed with code {Code} : {Text}", resp.StatusCode, body);
+            return false;
+        }
+
+        user.SpotifyApiKey = spotifyKey;
+        return true;
+    }
+
+    /// <summary>
+    /// Gets the current user spotify API Key Id.
+    /// </summary>
+    /// <response code="200">Data returned.</response>
+    /// <response code="404">No API Id available for this session or session not found.</response>
+    /// <returns>A string containing the API key ID.</returns>
+    [HttpGet("ApiId")]
+    [Authorize]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<string>> GetApiId()
+    {
+        var session = await RequestHelpers.GetSession(_sessionManager, _userManager, HttpContext).ConfigureAwait(false);
+        _logger.LogInformation("Get spotify authorization data for session {Id}", session.Id);
+        if (session is null)
+        {
+            return NotFound("Session not found");
+        }
+
+        var user = _userManager.GetUserById(session.UserId);
+        if (user is null || user.Id.Equals(Guid.Empty))
+        {
+            return NotFound("User not found");
+        }
+
+        if (user.SpotifyApiKey is string key)
+        {
+            return user.SpotifyApiKey.Split(':')[0];
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>
     /// Gets an access token for spotify web playback.
     /// </summary>
     /// <response code="200">Data returned.</response>
     /// <response code="404">No clientID available for this session or session not found.</response>
-    /// <returns>An <see cref="IEnumerable{UserDto}"/> containing the sessions.</returns>
+    /// <returns>A <see cref="SpotifyAuthDataDto"/> containing the sessions.</returns>
     [HttpGet("AccessToken")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status200OK)]
