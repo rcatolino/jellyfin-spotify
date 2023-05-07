@@ -522,6 +522,20 @@ namespace Emby.Server.Implementations.Data
             return results;
         }
 
+        private void TryAddItems(Dictionary<Guid, BaseItem> items, IEnumerable<BaseItem> newItems, out int count, out int duplicates)
+        {
+            count = 0;
+            duplicates = 0;
+            foreach (var i in newItems)
+            {
+                count += 1;
+                if (!items.TryAdd(i.Id, i))
+                {
+                    duplicates += 1;
+                }
+            }
+        }
+
         private IReadOnlyList<BaseItem> AddSpotItems(InternalItemsQuery query, IReadOnlyList<BaseItem> db_results)
         {
             var itemtypes = query.IncludeItemTypes;
@@ -531,20 +545,28 @@ namespace Emby.Server.Implementations.Data
             }
 
             // TODO: Add limit check before each query
-            var results = new List<IReadOnlyList<BaseItem>> { db_results };
+            // var results = new List<IReadOnlyList<BaseItem>> { db_results };
+            var results = db_results.ToDictionary<BaseItem, Guid>(result => result.Id);
+            // var results = new Dictionary<Guid, BaseItem>(db_results.Select(result => new KeyValuePair<Guid,BaseItem>(result.Id, result)));
             if (itemtypes.Length == 0)
             {
                 if (!query.ParentId.Equals(Guid.Empty))
                 {
                     // This is the api's way to ask for an album tracks ?
-                    results.Add(AlbumTracks(query.User, query.ParentId).Select(pair => pair.Item).OrderBy(track => track.IndexNumber).ToList());
-                    _logger.LogInformation("Query Audio Items from stpotify for album {Ids} -> {N} results", query.ParentId, results.Last().Count);
+                    TryAddItems(
+                            results,
+                            AlbumTracks(query.User, query.ParentId)
+                                .Select(pair => pair.Item)
+                                .OrderBy(track => track.IndexNumber),
+                            out int count,
+                            out int duplicates);
+                    _logger.LogInformation("Query Audio Items from stpotify for album {Ids} -> {N} results, {D} duplicates", query.ParentId, count, duplicates);
                 }
 
                 if (query.ItemIds.Length > 0)
                 {
-                    results.Add(TracksById(query.ItemIds));
-                    _logger.LogInformation("Query Audio Items for user {U} from stpotify with ids {Ids} -> {N} results", query.User, query.ItemIds, results.Last().Count);
+                    TryAddItems(results, TracksById(query.ItemIds), out int count, out int duplicates);
+                    _logger.LogInformation("Query Audio Items for user {U} from stpotify with ids {Ids} -> {N} results, {D} duplicates", query.User, query.ItemIds, count, duplicates);
                 }
             }
 
@@ -552,30 +574,39 @@ namespace Emby.Server.Implementations.Data
             {
                 if (query.ArtistIds.Length > 0)
                 {
-                    results.Add(query.ArtistIds
-                        .Select(id => ArtistTopTracks(query.User, id).Select(pair => pair.Item))
-                        .SelectMany(list => list)
-                        .ToList());
-                    _logger.LogInformation("Query Audio Items from stpotify for artist {Ids} -> {N} results", query.ArtistIds, results.Last().Count);
+                    TryAddItems(
+                            results,
+                            query.ArtistIds
+                                .Select(id => ArtistTopTracks(query.User, id).Select(pair => pair.Item))
+                                .SelectMany(list => list),
+                            out int count,
+                            out int duplicates);
+                    _logger.LogInformation("Query Audio Items from stpotify for artist {Ids} -> {N} results, {D} duplicates", query.ArtistIds, count, duplicates);
                 }
 
                 if (query.AncestorIds.Length > 0)
                 {
-                    results.Add(query.AncestorIds
-                        .Select(id => AlbumTracks(query.User, id).Select(pair => pair.Item))
-                        .SelectMany(list => list)
-                        // .OrderBy(track => track.IndexNumber)
-                        .ToList());
-                    _logger.LogInformation("Query Audio Items from stpotify for albums {Ids} -> {N} results", query.AncestorIds, results.Last().Count);
+                    TryAddItems(
+                            results,
+                            query.AncestorIds
+                                .Select(id => AlbumTracks(query.User, id).Select(pair => pair.Item))
+                                .SelectMany(list => list)
+                                .ToList(),
+                            out int count,
+                            out int duplicates);
+                    _logger.LogInformation("Query Audio Items from stpotify for albums {Ids} -> {N} results, {D} duplicates", query.AncestorIds, count, duplicates);
                 }
 
                 if (query.SearchTerm is not null)
                 {
-                    results.Add(
+                    TryAddItems(
+                            results,
                             SearchSpotItem(query.User, query.SearchTerm, "track", query.Limit ?? 25)
-                            .Select(itemAndCount => itemAndCount.Item)
-                            .ToList());
-                    _logger.LogInformation("Query Audio Items from stpotify matching {Search} -> {N} results", query.SearchTerm, results.Last().Count);
+                                .Select(itemAndCount => itemAndCount.Item)
+                                .ToList(),
+                            out int count,
+                            out int duplicates);
+                    _logger.LogInformation("Query Audio Items from stpotify matching {Search} -> {N} results, {D} duplicates", query.SearchTerm, count, duplicates);
                 }
             }
 
@@ -583,33 +614,45 @@ namespace Emby.Server.Implementations.Data
             {
                 if (query.ArtistIds.Length > 0)
                 {
-                    results.Add(query.ArtistIds
-                        .Select(id => ArtistAlbum(query.User, id, 50).Select(pair => pair.Item))
-                        .SelectMany(list => list)
-                        .ToList());
-                    _logger.LogInformation("Query MusicAlbum Items from stpotify for {Ids} -> {N} results", query.ArtistIds, results.Last().Count);
+                    TryAddItems(
+                            results,
+                            query.ArtistIds
+                                .Select(id => ArtistAlbum(query.User, id, 50).Select(pair => pair.Item))
+                                .SelectMany(list => list)
+                                .ToList(),
+                            out int count,
+                            out int duplicates);
+                    _logger.LogInformation("Query MusicAlbum Items from stpotify for {Ids} -> {N} results, {D} duplicates", query.ArtistIds, count, duplicates);
                 }
 
                 if (query.AlbumArtistIds.Length > 0)
                 {
-                    results.Add(query.AlbumArtistIds
-                        .Select(id => ArtistAlbum(query.User, id, 50).Select(pair => pair.Item))
-                        .SelectMany(list => list)
-                        .ToList());
-                    _logger.LogInformation("Query MusicAlbum Items from stpotify for {Ids} -> {N} results", query.ArtistIds, results.Last().Count);
+                    TryAddItems(
+                            results,
+                            query.AlbumArtistIds
+                                .Select(id => ArtistAlbum(query.User, id, 50).Select(pair => pair.Item))
+                                .SelectMany(list => list)
+                                .ToList(),
+                            out int count,
+                            out int duplicates);
+                    _logger.LogInformation("Query MusicAlbum Items from stpotify for {Ids} -> {N} results, {D} duplicates", query.ArtistIds, count, duplicates);
                 }
 
                 if (query.SearchTerm is not null)
                 {
-                    results.Add(
+                    TryAddItems(
+                            results,
                             SearchSpotItem(query.User, query.SearchTerm, "album", query.Limit ?? 25)
-                            .Select(itemAndCount => itemAndCount.Item)
-                            .ToList());
-                    _logger.LogInformation("Query Album Items from stpotify matching {Search} -> {N} results", query.SearchTerm, results.Last().Count);
+                                .Select(itemAndCount => itemAndCount.Item)
+                                .ToList(),
+                            out int count,
+                            out int duplicates);
+                    _logger.LogInformation("Query Album Items from stpotify matching {Search} -> {N} results, {D} duplicates", query.SearchTerm, count, duplicates);
                 }
             }
 
-            return results.SelectMany(list => list).ToList();
+            // var output = results.SelectMany(list => list).ToList().ToDictionary<BaseItem, Guid>(result => result.Id);
+            return results.Values.ToArray();
         }
 
         /// <inheritdoc/>
@@ -619,7 +662,7 @@ namespace Emby.Server.Implementations.Data
             LogQuery("GetItemList", query, results.Count);
             if (results.Count > 0 && query.Name != string.Empty && query.IncludeItemTypes.Contains(BaseItemKind.MusicArtist))
             {
-                _logger.LogInformation("GetItemList got {N} results from DB : {Res}, stack : {Stack}", results.Count, results.Select(r => $"{r.Name}, {r.Id}, {r.ExternalId}"));
+                _logger.LogInformation("GetItemList got {N} results from DB : {Res}", results.Count, results.Select(r => $"{r.Name}, {r.Id}, {r.ExternalId}"));
             }
 
             return AddSpotItems(query, results).ToList();
