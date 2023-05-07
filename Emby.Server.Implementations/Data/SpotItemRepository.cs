@@ -732,7 +732,7 @@ namespace Emby.Server.Implementations.Data
         {
             if (items.First().ExternalId == string.Empty || items.First().ExternalId is null)
             {
-                _logger.LogInformation("SaveItems : {Items}, {Stack}", items.Select(i => $"{i.Name}, {i.Id}, {i.ExternalId}"), Environment.StackTrace);
+                _logger.LogInformation("SaveItems : {Items}, {Stack}", items.Select(i => $"{i.Name}, {i.Id}, {i.ExternalId}"));
             }
 
             _backend.SaveItems(items, cancellationToken);

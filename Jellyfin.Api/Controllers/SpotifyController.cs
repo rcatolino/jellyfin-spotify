@@ -278,11 +278,10 @@ public class SpotifyController : BaseJellyfinApiController
             [FromQuery, Required] string state,
             [FromQuery] string? error)
     {
-        var decoded_state = HttpUtility.UrlDecode(state);
-        Guid? userId = _memoryCache.Get<Guid>(decoded_state);
+        Guid? userId = _memoryCache.Get<Guid>(state);
         if (userId is null || userId.Equals(Guid.Empty))
         {
-            _logger.LogInformation("Spotify OAuth callback, state check failed for {S}. UserId is {U}", decoded_state, userId);
+            _logger.LogInformation("Spotify OAuth callback, state check failed for {S}. UserId is {U}", state, userId);
             return NotFound("State check failed");
         }
 
