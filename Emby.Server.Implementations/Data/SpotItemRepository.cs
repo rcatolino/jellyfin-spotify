@@ -73,6 +73,11 @@ namespace Emby.Server.Implementations.Data
             return $"[{inner}]";
         }
 
+        private string UriToId(string uri)
+        {
+            return uri.Split(":").Last();
+        }
+
         private void LogQuery(string methodName, InternalItemsQuery query, int resultCount)
         {
             List<string> parts = new List<string> { methodName };
@@ -84,6 +89,21 @@ namespace Emby.Server.Implementations.Data
             if (query.SearchTerm is not null)
             {
                 parts.Add($"Search {query.SearchTerm}");
+            }
+
+            if (query.Name is not null && query.Name != string.Empty)
+            {
+                parts.Add($"Name {query.Name}");
+            }
+
+            if (query.NameContains is not null && query.NameContains != string.Empty)
+            {
+                parts.Add($"NameContains {query.NameContains}");
+            }
+
+            if (query.TopParentIds.Length != 0)
+            {
+                parts.Add($"TopParents {query.TopParentIds}");
             }
 
             parts.Add($"Recursive {query.Recursive}");
@@ -209,6 +229,7 @@ namespace Emby.Server.Implementations.Data
         /// <inheritdoc/>
         public void DeleteItem(Guid id)
         {
+            _logger.LogInformation("DeleteItem : {Id}", id);
             _backend.DeleteItem(id);
         }
 
@@ -301,7 +322,7 @@ namespace Emby.Server.Implementations.Data
                 else
                 {
                     _logger.LogInformation("Spotify query : {Q}, result : {J}", query, json);
-                    return json.ToItems(_logger, _memoryCache, parentId, user.Id);
+                    return json.ToItems(_logger, _memoryCache, this, parentId, user.Id);
                 }
             }
             catch (System.Text.Json.JsonException e)
@@ -319,7 +340,7 @@ namespace Emby.Server.Implementations.Data
         private QueryData? ValidateQueryData(User? user, Guid itemId)
         {
             _memoryCache.TryGetValue(itemId, out BaseItem? item);
-            if (item is null || item.ServiceName != "spotify")
+            if (item is null || item.ExternalId is null || !item.ExternalId.StartsWith("spotify", StringComparison.InvariantCulture))
             {
                 _logger.LogInformation("Spotify album tracks lookup : Album {Guid} is not in cache or doesn't come from spotify", itemId);
                 return null;
@@ -347,7 +368,7 @@ namespace Emby.Server.Implementations.Data
         {
             if (ValidateQueryData(user, artistId) is QueryData qdata)
             {
-                string searchEP = $"{spotAPI}/artists/{qdata.Item.ExternalId}/albums?include_groups=album&limit={limit}&market=FR";
+                string searchEP = $"{spotAPI}/artists/{UriToId(qdata.Item.ExternalId)}/albums?include_groups=album&limit={limit}&market=FR";
                 var res = SpotQuery<SpotifyData.AlbumList>(qdata.User, searchEP, artistId);
                 _logger.LogInformation("Searching spotify for albums by artist {ArtistId} -> {N} results", qdata.Item.ExternalId, res.Count);
                 return res;
@@ -360,7 +381,7 @@ namespace Emby.Server.Implementations.Data
         {
             var tracks = trackIds
                 .Select(id => _memoryCache.Get<BaseItem>(id))
-                .Where(item => item is BaseItem && item.ServiceName == "spotify")
+                .Where(item => item is BaseItem && item.ExternalId is not null && item.ExternalId.StartsWith("spotify", StringComparison.InvariantCulture))
                 .Select(item => item!)
                 .ToList();
             return tracks;
@@ -407,7 +428,7 @@ namespace Emby.Server.Implementations.Data
 
                 _logger.LogInformation("Searching for tracks on album {AName} {AId}", folder.Name, folder.ExternalId);
                 // TODO: don't hardcode market. But where to get it ?
-                string searchEP = $"{spotAPI}/albums/{folder.ExternalId}/tracks?market=FR&limit=50";
+                string searchEP = $"{spotAPI}/albums/{UriToId(folder.ExternalId)}/tracks?market=FR&limit=50";
                 var res = SpotQuery<SpotifyData.TrackList>(qdata.User, searchEP, albumId);
                 LinkTracks(folder, res.Select(i => i.Item).ToList());
                 _logger.LogInformation("Searching spotify for track on album {AlbumId} -> {N} results", folder.ExternalId, res.Count);
@@ -422,7 +443,7 @@ namespace Emby.Server.Implementations.Data
             if (ValidateQueryData(user, artistId) is QueryData qdata)
             {
                 // TODO: don't hardcode market. But where to get it ?
-                string searchEP = $"{spotAPI}/artists/{qdata.Item.ExternalId}/top-tracks?market=FR";
+                string searchEP = $"{spotAPI}/artists/{UriToId(qdata.Item.ExternalId)}/top-tracks?market=FR";
                 var res = SpotQuery<SpotifyData.TrackList2>(qdata.User, searchEP, artistId);
                 _logger.LogInformation("Searching spotify for track by artist {ArtistId} -> {N} results", qdata.Item.ExternalId, res.Count);
                 return res;
@@ -596,6 +617,11 @@ namespace Emby.Server.Implementations.Data
         {
             var results = _backend.GetItemList(query);
             LogQuery("GetItemList", query, results.Count);
+            if (results.Count > 0 && query.Name != string.Empty && query.IncludeItemTypes.Contains(BaseItemKind.MusicArtist))
+            {
+                _logger.LogInformation("GetItemList got {N} results from DB : {Res}, stack : {Stack}", results.Count, results.Select(r => $"{r.Name}, {r.Id}, {r.ExternalId}"));
+            }
+
             return AddSpotItems(query, results).ToList();
         }
 
@@ -627,8 +653,8 @@ namespace Emby.Server.Implementations.Data
             var res = _backend.GetMediaStreams(query);
             if (_memoryCache.Get<BaseItem>(query.ItemId) is BaseItem item)
             {
-                _logger.LogInformation("GetMediaStreams : For item {G}/{IE}, type {T}, media index : {I}", query.ItemId, item.ExternalId, query.Type, query.Index);
-                if (item.ServiceName == "spotify")
+                // _logger.LogInformation("GetMediaStreams : For item {G}/{IE}, type {T}, media index : {I}", query.ItemId, item.ExternalId, query.Type, query.Index);
+                if (item.ExternalId.StartsWith("spotify", StringComparison.InvariantCulture))
                 {
                     var stream = new MediaStream
                     {
@@ -642,7 +668,7 @@ namespace Emby.Server.Implementations.Data
                 }
             }
 
-            _logger.LogInformation("Got {N} media streams for {I} : {M}", res.Count, query.ItemId, string.Join("\n\t", res.Select(ms => FormatMediaStream(ms))));
+            // _logger.LogInformation("Got {N} media streams for {I} : {M}", res.Count, query.ItemId, string.Join("\n\t", res.Select(ms => FormatMediaStream(ms))));
             return res;
         }
 
@@ -704,6 +730,11 @@ namespace Emby.Server.Implementations.Data
         /// <inheritdoc/>
         public void SaveItems(IReadOnlyList<BaseItem> items, CancellationToken cancellationToken)
         {
+            if (items.First().ExternalId == string.Empty || items.First().ExternalId is null)
+            {
+                _logger.LogInformation("SaveItems : {Items}, {Stack}", items.Select(i => $"{i.Name}, {i.Id}, {i.ExternalId}"), Environment.StackTrace);
+            }
+
             _backend.SaveItems(items, cancellationToken);
         }
 
@@ -716,6 +747,7 @@ namespace Emby.Server.Implementations.Data
         /// <inheritdoc/>
         public void SaveMediaStreams(Guid id, IReadOnlyList<MediaStream> streams, CancellationToken cancellationToken)
         {
+            _logger.LogInformation("SaveMediaStreams: {Items}", streams.Select(i => i.Path));
             _backend.SaveMediaStreams(id, streams, cancellationToken);
         }
 
