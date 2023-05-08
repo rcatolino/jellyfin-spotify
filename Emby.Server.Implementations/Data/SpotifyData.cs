@@ -40,6 +40,31 @@ namespace Emby.Server.Implementations.Data
         }
 
         /// <summary>
+        /// Return a local item by Id if it exists in cache or db and comes from spotify (or else return null).
+        /// </summary>
+        /// <param name="itemRepository">Item repository.</param>
+        /// <param name="memoryCache">Memory cache.</param>
+        /// <param name="localId">Local Id.</param>
+        /// <typeparam name="T">BaseItem type (MusicArtist/MusicAlbum or Audio.</typeparam>
+        /// <returns>Existing Item or null.</returns>
+        public static T TryRetrieveItem<T>(IItemRepository itemRepository, IMemoryCache memoryCache, Guid localId)
+            where T : BaseItem
+        {
+            if (memoryCache.TryGetValue<T>(localId, out T cachedItem))
+            {
+                return cachedItem;
+            }
+
+            var item = itemRepository.RetrieveItem(localId);
+            if (item is T localItem && item.ExternalId is not null && item.ExternalId.StartsWith("spotify", StringComparison.InvariantCulture))
+            {
+                return localItem;
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// Class CommonData containing data common to many spotify types.
         /// </summary>
         public class CommonData
@@ -101,31 +126,6 @@ namespace Emby.Server.Implementations.Data
             }
 
             /// <summary>
-            /// Return corresponding local item by Id if it exists (or else return null).
-            /// </summary>
-            /// <param name="itemRepository">Item repository.</param>
-            /// <param name="memoryCache">Memory cache.</param>
-            /// <typeparam name="T">BaseItem type (MusicArtist/MusicAlbum or Audio.</typeparam>
-            /// <returns>Existing Item or null.</returns>
-            public T TryRetrieveItem<T>(IItemRepository itemRepository, IMemoryCache memoryCache)
-                where T : BaseItem
-            {
-                var localId = Base62.B62ToGuid(Id);
-                if (memoryCache.TryGetValue<T>(localId, out T cachedItem))
-                {
-                    return cachedItem;
-                }
-
-                var item = itemRepository.RetrieveItem(localId);
-                if (item is T localItem && item.ExternalId is not null && item.ExternalId.StartsWith("spotify", StringComparison.InvariantCulture))
-                {
-                    return localItem;
-                }
-
-                return null;
-            }
-
-            /// <summary>
             /// Fill provided base item values.
             /// </summary>
             /// <param name="item">BaseItem.</param>
@@ -175,6 +175,7 @@ namespace Emby.Server.Implementations.Data
                     item.AddImage(new ItemImageInfo { Width = img.Width, Height = img.Height, Path = img.Url, Type = ImageType.Thumb });
                 }
 
+                item.PresentationUniqueKey = item.CreatePresentationUniqueKey();
                 return item;
             }
         }
@@ -231,7 +232,7 @@ namespace Emby.Server.Implementations.Data
             /// <inheritdoc/>
             public override BaseItem ToItem(ILogger logger, IMemoryCache memoryCache, IItemRepository itemRepository, Guid? parentId = null, Guid? ownerId = null)
             {
-                var album = TryRetrieveItem<MusicAlbum>(itemRepository, memoryCache);
+                var album = TryRetrieveItem<MusicAlbum>(itemRepository, memoryCache, Base62.B62ToGuid(Id));
                 if (album is null)
                 {
                     album = new MusicAlbum();
@@ -258,8 +259,6 @@ namespace Emby.Server.Implementations.Data
                     {
                     }
 
-                    // This track doesn't exist in the database yet, create it and save it.
-                    // TODO: do we really need to save every track ? Maybe only once they appear in a playlist/playqueue is enough.
                     itemRepository.SaveItems(new MusicAlbum[] { album }, CancellationToken.None);
                 }
 
@@ -303,7 +302,8 @@ namespace Emby.Server.Implementations.Data
             /// <inheritdoc/>
             public override BaseItem ToItem(ILogger logger, IMemoryCache memoryCache, IItemRepository itemRepository, Guid? parentId = null, Guid? ownerId = null)
             {
-                var track = TryRetrieveItem<Audio>(itemRepository, memoryCache);
+                var track = TryRetrieveItem<Audio>(itemRepository, memoryCache, Base62.B62ToGuid(Id));
+                bool mustSave = false;
                 if (track is null)
                 {
                     track = new Audio();
@@ -319,13 +319,25 @@ namespace Emby.Server.Implementations.Data
                         artist.ToItem(logger, memoryCache, itemRepository, null, ownerId);
                     }
 
-                    if (parentId is null)
-                    {
-                        track.ParentId = Base62.B62ToGuid(Artists.First().Id);
-                    }
-
                     // This track doesn't exist in the database yet, create it and save it.
-                    itemRepository.SaveItems(new Audio[] { track }, CancellationToken.None);
+                    mustSave = true;
+                }
+                else
+                {
+                    if (parentId is not null && track.ParentId.Equals(Guid.Empty))
+                    {
+                        logger.LogInformation("Setting parentId to {P} for track {T}", parentId, track.Id);
+                        track.ParentId = (Guid)parentId;
+                        mustSave = true;
+                    }
+                }
+
+                if (mustSave)
+                {
+                    itemRepository.SaveItems(new Audio[] { track }, CancellationToken.None); // TODO: move saving to parent to batch DB ops
+                    // This track doesn't exist in the database yet (or is missing data), create it and save it.
+                    // TODO: do we really need to save every track ? Maybe only once they appear in a playlist/playqueue is enough. ie if this track has no parent don't bother saving it
+                    // TODO: force saving if metadata is too old
                 }
 
                 memoryCache.Set(track.Id, track, new TimeSpan(1, 0, 0));
@@ -341,7 +353,7 @@ namespace Emby.Server.Implementations.Data
             /// <inheritdoc/>
             public override BaseItem ToItem(ILogger logger, IMemoryCache memoryCache, IItemRepository itemRepository, Guid? parentId = null, Guid? ownerId = null)
             {
-                var artist = TryRetrieveItem<MusicArtist>(itemRepository, memoryCache);
+                var artist = TryRetrieveItem<MusicArtist>(itemRepository, memoryCache, Base62.B62ToGuid(Id));
                 if (artist is null)
                 {
                     // This artist doesn't exist in the database yet, create it and save it.

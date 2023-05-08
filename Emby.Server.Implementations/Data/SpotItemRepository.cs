@@ -101,15 +101,20 @@ namespace Emby.Server.Implementations.Data
                 parts.Add($"NameContains {query.NameContains}");
             }
 
-            if (query.TopParentIds.Length != 0)
+            if (query.TopParentIds.Length > 0)
             {
-                parts.Add($"TopParents {query.TopParentIds}");
+                parts.Add($"TopParents {ListToString(query.TopParentIds)}");
             }
 
             parts.Add($"Recursive {query.Recursive}");
             if (query.Limit is not null)
             {
                 parts.Add($"limit {query.Limit}");
+            }
+
+            if (query.StartIndex is not null)
+            {
+                parts.Add($"start {query.StartIndex}");
             }
 
             if (query.IsFolder is not null)
@@ -408,21 +413,17 @@ namespace Emby.Server.Implementations.Data
                 _logger.LogInformation("Album {AName} already has {C} linked tracks", folder.Name, folder.LinkedChildren.Length);
                 if (folder.LinkedChildren.Length > 0)
                 {
-                    // First see if we have the tracks still in cache
-                    var cachedTracks = folder.LinkedChildren
+                    // First see if we have the tracks in cache or db
+                    var localTracks = folder.LinkedChildren
                         .Where(child => child.ItemId is not null)
-                        .Select(child =>
-                            {
-                                _memoryCache.TryGetValue(child.ItemId!, out BaseItem? item);
-                                return item;
-                            })
+                        .Select(child => SpotifyData.TryRetrieveItem<BaseItem>(this, _memoryCache, (Guid)child.ItemId!))
                         .Where(item => item is Audio)
                         .Select(item => (item!, new ItemCounts { SongCount = 1 }))
                         .ToList();
-                    if (cachedTracks.Count == folder.LinkedChildren.Length)
+                    if (localTracks.Count == folder.LinkedChildren.Length)
                     {
-                        _logger.LogInformation("All {C} linked tracks for album {AName} are still in cache, not querying spotify", cachedTracks.Count);
-                        return cachedTracks;
+                        _logger.LogInformation("All {C} linked tracks for album {AName} are still in cache or db, not querying spotify", localTracks.Count);
+                        return localTracks;
                     }
                 }
 
@@ -444,7 +445,7 @@ namespace Emby.Server.Implementations.Data
             {
                 // TODO: don't hardcode market. But where to get it ?
                 string searchEP = $"{spotAPI}/artists/{UriToId(qdata.Item.ExternalId)}/top-tracks?market=FR";
-                var res = SpotQuery<SpotifyData.TrackList2>(qdata.User, searchEP, artistId);
+                var res = SpotQuery<SpotifyData.TrackList2>(qdata.User, searchEP);
                 _logger.LogInformation("Searching spotify for track by artist {ArtistId} -> {N} results", qdata.Item.ExternalId, res.Count);
                 return res;
             }
@@ -468,20 +469,26 @@ namespace Emby.Server.Implementations.Data
         public QueryResult<(BaseItem Item, ItemCounts ItemCounts)> GetArtists(InternalItemsQuery query)
         {
             // First, query the local database.
-            QueryResult<(BaseItem, ItemCounts)> results = _backend.GetArtists(query);
-            LogQuery("GetArtists", query, results.TotalRecordCount);
+            var results = _backend.GetArtists(query).Items.ToDictionary<(BaseItem, ItemCounts), Guid>(result => result.Item1.Id);
+            LogQuery("GetArtists", query, results.Count);
             // Then if we are looking for more results, query spotify.
-            if (query.SearchTerm is not null && results.TotalRecordCount < query.Limit)
+            if (query.SearchTerm is not null && results.Count < query.Limit)
             {
-                var spotResults = SearchSpotItem(
-                        query.User,
-                        query.SearchTerm,
-                        "artist",
-                        (query.Limit ?? 20) - results.TotalRecordCount);
-                return new QueryResult<(BaseItem, ItemCounts)>(results.Items.Concat(spotResults).ToList());
+                int duplicates = 0;
+                int count = 0;
+                foreach (var (item, itemCount) in SearchSpotItem(query.User, query.SearchTerm, "artist", (query.Limit ?? 20) - results.Count))
+                {
+                    count += 1;
+                    if (!results.TryAdd(item.Id, (item, itemCount)))
+                    {
+                        duplicates += 1;
+                    }
+                }
+
+                _logger.LogInformation("Query Artist Items from stpotify matching {Search} -> {N} results, {D} duplicates", query.SearchTerm, count, duplicates);
             }
 
-            return results;
+            return new QueryResult<(BaseItem, ItemCounts)>(results.Values.ToList());
         }
 
         /// <inheritdoc/>
@@ -561,12 +568,6 @@ namespace Emby.Server.Implementations.Data
                             out int count,
                             out int duplicates);
                     _logger.LogInformation("Query Audio Items from stpotify for album {Ids} -> {N} results, {D} duplicates", query.ParentId, count, duplicates);
-                }
-
-                if (query.ItemIds.Length > 0)
-                {
-                    TryAddItems(results, TracksById(query.ItemIds), out int count, out int duplicates);
-                    _logger.LogInformation("Query Audio Items for user {U} from stpotify with ids {Ids} -> {N} results, {D} duplicates", query.User, query.ItemIds, count, duplicates);
                 }
             }
 
@@ -659,10 +660,15 @@ namespace Emby.Server.Implementations.Data
         public List<BaseItem> GetItemList(InternalItemsQuery query)
         {
             var results = _backend.GetItemList(query);
-            LogQuery("GetItemList", query, results.Count);
+            /*
             if (results.Count > 0 && query.Name != string.Empty && query.IncludeItemTypes.Contains(BaseItemKind.MusicArtist))
             {
                 _logger.LogInformation("GetItemList got {N} results from DB : {Res}", results.Count, results.Select(r => $"{r.Name}, {r.Id}, {r.ExternalId}"));
+            }
+            */
+            if (query.Name is null || query.Name == string.Empty)
+            {
+                LogQuery("GetItemList", query, results.Count);
             }
 
             return AddSpotItems(query, results).ToList();
