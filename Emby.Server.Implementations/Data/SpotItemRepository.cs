@@ -37,6 +37,7 @@ namespace Emby.Server.Implementations.Data
         private SqliteItemRepository _backend;
         private ILogger<SqliteItemRepository> _logger;
         private HttpClient _httpClient;
+        private SpotifyData.SpotifyRootFolder _rootFolder;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="SpotItemRepository"/> class.
@@ -47,7 +48,7 @@ namespace Emby.Server.Implementations.Data
         /// <param name="memoryCache">The memory cache.</param>
         /// <param name="userManager">The user manager.</param>
         /// <param name="localization">Instance of the <see cref="ILocalizationManager"/> interface.</param>
-        /// <param name="imageProcessor">Instance of the <see cref="IImageProcessor"/> interface.</param>
+        /// <param name="imageProcessor">Instance of the <see cref="ILibraryManager"/> interface.</param>
         /// <param name="httpClientFactory">The <see cref="IHttpClientFactory"/>.</param>
         public SpotItemRepository(
             IServerConfigurationManager config,
@@ -64,6 +65,7 @@ namespace Emby.Server.Implementations.Data
             _memoryCache = memoryCache;
             _userManager = userManager;
             _httpClient = httpClientFactory.CreateClient(NamedClient.Default);
+            _rootFolder = SpotifyData.SpotifyRootFolder.GetOrCreate(this, _memoryCache);
         }
 
         private string ListToString<T>(T[] l)
@@ -84,6 +86,11 @@ namespace Emby.Server.Implementations.Data
             if (query.User is not null)
             {
                 parts.Add($"User {query.User.Username}");
+            }
+
+            if (query.IsFavorite is not null)
+            {
+                parts.Add($"Favorite {query.IsFavorite}");
             }
 
             if (query.SearchTerm is not null)
@@ -134,7 +141,12 @@ namespace Emby.Server.Implementations.Data
 
             if (query.AlbumArtistIds.Length > 0)
             {
-                parts.Add($"ArtistIds : {ListToString(query.AlbumArtistIds)}");
+                parts.Add($"AlbumArtistIds : {ListToString(query.AlbumArtistIds)}");
+            }
+
+            if (query.ArtistIds.Length > 0)
+            {
+                parts.Add($"ArtistIds : {ListToString(query.ArtistIds)}");
             }
 
             if (query.AncestorIds.Length > 0)
@@ -453,7 +465,7 @@ namespace Emby.Server.Implementations.Data
             return new List<(BaseItem, ItemCounts)>();
         }
 
-        private List<(BaseItem Item, ItemCounts ItemCounts)> SearchSpotItem(User? user, string search, string what, int limit)
+        private List<(BaseItem Item, ItemCounts ItemCounts)> SearchSpotItem(User? user, string search, string what, int limit, Guid? parentId = null)
         {
             if (user is null)
             {
@@ -462,7 +474,7 @@ namespace Emby.Server.Implementations.Data
 
             string searchEP = $"https://api.spotify.com/v1/search?q={search}&type={what}&limit={limit}";
             _logger.LogInformation("SearchSpotItem for {N} {What} matching {Search}", limit, what, search);
-            return SpotQuery<SpotifyData.SearchResponse>(user, searchEP);
+            return SpotQuery<SpotifyData.SearchResponse>(user, searchEP, parentId);
         }
 
         /// <inheritdoc/>
@@ -476,7 +488,12 @@ namespace Emby.Server.Implementations.Data
             {
                 int duplicates = 0;
                 int count = 0;
-                foreach (var (item, itemCount) in SearchSpotItem(query.User, query.SearchTerm, "artist", (query.Limit ?? 20) - results.Count))
+                foreach (var (item, itemCount) in SearchSpotItem(
+                            query.User,
+                            query.SearchTerm,
+                            "artist",
+                            (query.Limit ?? 20) - results.Count,
+                            _rootFolder.Id)) // We use spotify root folder as parent for artists to anchor all spotify items to the spotify root parent
                 {
                     count += 1;
                     if (!results.TryAdd(item.Id, (item, itemCount)))
@@ -659,6 +676,11 @@ namespace Emby.Server.Implementations.Data
         /// <inheritdoc/>
         public List<BaseItem> GetItemList(InternalItemsQuery query)
         {
+            if (query.TopParentIds.Length > 0)
+            {
+                query.TopParentIds = query.TopParentIds.Append(_rootFolder.Id).ToArray();
+            }
+
             var results = _backend.GetItemList(query);
             /*
             if (results.Count > 0 && query.Name != string.Empty && query.IncludeItemTypes.Contains(BaseItemKind.MusicArtist))
