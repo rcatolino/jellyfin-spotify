@@ -725,7 +725,7 @@ namespace Emby.Server.Implementations.Data
             if (_memoryCache.Get<BaseItem>(query.ItemId) is BaseItem item)
             {
                 // _logger.LogInformation("GetMediaStreams : For item {G}/{IE}, type {T}, media index : {I}", query.ItemId, item.ExternalId, query.Type, query.Index);
-                if (item.ExternalId.StartsWith("spotify", StringComparison.InvariantCulture))
+                if (item.ExternalId is not null && item.ExternalId.StartsWith("spotify", StringComparison.InvariantCulture))
                 {
                     var stream = new MediaStream
                     {
