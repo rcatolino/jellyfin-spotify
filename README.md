@@ -1,4 +1,19 @@
-<h1 align="center">Jellyfin</h1>
+<h1 align="center">Jellyfin - Spotify</h1>
+This is a fork of <a href="https://github.com/jellyfin/jellyfin">Jellyfin</a> that also allows playing music from spotify.
+Spotify playback in the browser need to use the corresponding <a href="https://github.com/rcatolino/jellyfin-web">Jellyfin-Web</a> client.
+Spotify playback from the jellyfin android apps is not supported.
+
+Integration with spotify is done using the official spotify
+<a href="https://developer.spotify.com/documentation/web-api">Web API</a> and
+<a href="https://developer.spotify.com/documentation/web-playback-sdk">Web Playback SDK</a> and therefore requires a premium subscription.
+
+<strong>Configuration</strong><br/>
+- You first need to create an app in <a href="https://developer.spotify.com/dashboard/create">spotify developper dashboard</a>.
+You must set `RedirectURI` to `http[s]://<jellyfin-host>[:<jellyfin-port]/Spotify/AuthCallback`.
+- Once the app is created, set the App Id and the App Key in jellyfin settings for your user.
+
+---
+
 <h3 align="center">The Free Software Media System</h3>
 
 ---
