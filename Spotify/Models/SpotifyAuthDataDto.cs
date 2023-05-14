@@ -1,4 +1,4 @@
-namespace Jellyfin.Api.Models;
+namespace Spotify.Models;
 
 /// <summary>
 /// Spotify auth data.

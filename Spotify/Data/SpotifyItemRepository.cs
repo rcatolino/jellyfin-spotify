@@ -1,12 +1,7 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Net;
-using System.Net.Http;
+using System.Numerics;
 using System.Text;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 using Jellyfin.Data.Entities;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Common.Net;
@@ -24,23 +19,23 @@ using MediaBrowser.Model.Querying;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
-namespace Emby.Server.Implementations.Data
+namespace Spotify.Data
 {
     /// <summary>
-    /// Class SpotItemRepository.
+    /// Class SpotifyItemRepository.
     /// </summary>
-    public class SpotItemRepository : IItemRepository
+    public class SpotifyItemRepository : IItemRepository
     {
         private readonly IMemoryCache _memoryCache;
         private readonly IUserManager _userManager;
         private readonly string spotAPI = "https://api.spotify.com/v1";
-        private SqliteItemRepository _backend;
-        private ILogger<SqliteItemRepository> _logger;
+        private IItemRepository _backend;
+        private ILogger<SpotifyItemRepository> _logger;
         private HttpClient _httpClient;
-        private SpotifyData.SpotifyRootFolder _rootFolder;
+        private SpotifyRootFolder _rootFolder;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="SpotItemRepository"/> class.
+        /// Initializes a new instance of the <see cref="SpotifyItemRepository"/> class.
         /// </summary>
         /// <param name="config">Instance of the <see cref="IServerConfigurationManager"/> interface.</param>
         /// <param name="appHost">Instance of the <see cref="IServerApplicationHost"/> interface.</param>
@@ -50,22 +45,83 @@ namespace Emby.Server.Implementations.Data
         /// <param name="localization">Instance of the <see cref="ILocalizationManager"/> interface.</param>
         /// <param name="imageProcessor">Instance of the <see cref="ILibraryManager"/> interface.</param>
         /// <param name="httpClientFactory">The <see cref="IHttpClientFactory"/>.</param>
-        public SpotItemRepository(
+        public SpotifyItemRepository(
             IServerConfigurationManager config,
             IServerApplicationHost appHost,
-            ILogger<SqliteItemRepository> logger,
+            ILogger<SpotifyItemRepository> logger,
             ILocalizationManager localization,
             IImageProcessor imageProcessor,
             IMemoryCache memoryCache,
             IUserManager userManager,
             IHttpClientFactory httpClientFactory)
         {
-            _backend = new SqliteItemRepository(config, appHost, logger, localization, imageProcessor);
             _logger = logger;
+            _backend = null!; // We will crash if this class is used before Initialize is called. That's fine, that would be a bug.
             _memoryCache = memoryCache;
             _userManager = userManager;
             _httpClient = httpClientFactory.CreateClient(NamedClient.Default);
-            _rootFolder = SpotifyData.SpotifyRootFolder.GetOrCreate(this, _memoryCache);
+            _rootFolder = null!;
+        }
+
+        /// <summary>
+        /// Generates a GUID from a spotify ID.
+        /// Warning : this is not a always a lossless operation as not all spotify IDs fit in 16 bytes.
+        /// </summary>
+        /// <param name="base62String">string containing Base62 encoded data.</param>
+        /// <returns>Guid containing the first 16 bytes of the Base62 decoded data.</returns>
+        public static Guid B62ToGuid(string base62String)
+        {
+            const string Base62Chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+            var baseValue = new BigInteger(62);
+            var value = new BigInteger(0);
+            foreach (var c in base62String)
+            {
+                var charValue = Base62Chars.IndexOf(c, StringComparison.Ordinal);
+                value = BigInteger.Multiply(value, baseValue);
+                value = BigInteger.Add(value, new BigInteger(charValue));
+            }
+
+            var byteArray = value.ToByteArray(true, true);
+            // Sometimes spotify will use base62 IDs that don't fit on 16 bytes. (e.g. 7y9COUDxusQXRjW95vOubE is a valid spotify artist ID, but has 17 bytes)
+            // In this case we just remove the MSB, the original id will be stored in the ExternalId anyway and the MusicArtist is kept in cache.
+            if (byteArray.Length == 17)
+            {
+                return new Guid(new ArraySegment<byte>(byteArray, 1, byteArray.Length - 1));
+            }
+            else if (byteArray.Length < 16)
+            {
+                byte[] result = new byte[16];
+                byteArray.CopyTo(result, 16 - byteArray.Length);
+                return new Guid(result);
+            }
+
+            return new Guid(byteArray);
+        }
+
+        /// <summary>
+        /// Return a local item by Id if it exists in cache or db and comes from spotify (or else return null).
+        /// </summary>
+        /// <param name="itemRepository">Item repository.</param>
+        /// <param name="memoryCache">Memory cache.</param>
+        /// <param name="localId">Local Id.</param>
+        /// <typeparam name="T">BaseItem type (MusicArtist/MusicAlbum or Audio.</typeparam>
+        /// <returns>Existing Item or null.</returns>
+        public static T? TryRetrieveItem<T>(IItemRepository itemRepository, IMemoryCache memoryCache, Guid localId)
+            where T : BaseItem
+        {
+            if (memoryCache.TryGetValue<T>(localId, out T? cachedItem))
+            {
+                return cachedItem;
+            }
+
+            var item = itemRepository.RetrieveItem(localId);
+            if (item is T localItem && item.ExternalId is not null && item.ExternalId.StartsWith("spotify", StringComparison.InvariantCulture))
+            {
+                memoryCache.Set(localItem.Id, localItem, new TimeSpan(1, 0, 0));
+                return localItem;
+            }
+
+            return null;
         }
 
         private string ListToString<T>(T[] l)
@@ -98,12 +154,12 @@ namespace Emby.Server.Implementations.Data
                 parts.Add($"Search {query.SearchTerm}");
             }
 
-            if (query.Name is not null && query.Name != string.Empty)
+            if (query.Name is not null && query.Name.Length > 0)
             {
                 parts.Add($"Name {query.Name}");
             }
 
-            if (query.NameContains is not null && query.NameContains != string.Empty)
+            if (query.NameContains is not null && query.NameContains.Length > 0)
             {
                 parts.Add($"NameContains {query.NameContains}");
             }
@@ -191,11 +247,13 @@ namespace Emby.Server.Implementations.Data
         /// <summary>
         /// Initialize backing sqlite item repo.
         /// </summary>
-        /// <param name="userDataRepo">The user data repository.</param>
+        /// <param name="backend">The underlying item repository.</param>
         /// <param name="userManager">The user manager.</param>
-        public void Initialize(SqliteUserDataRepository userDataRepo, IUserManager userManager)
+        public void Initialize(IItemRepository backend, IUserManager userManager)
         {
-            _backend.Initialize(userDataRepo, userManager);
+            _logger.LogInformation("Initializing Spotify Item Repository with backend {Backend}", backend);
+            _backend = backend;
+            _rootFolder = SpotifyRootFolder.GetOrCreate(this, _memoryCache);
             foreach (var user in userManager.Users)
             {
                 if (user.SpotifyApiKey is not null)
@@ -224,8 +282,8 @@ namespace Emby.Server.Implementations.Data
             var requestMessage = new HttpRequestMessage(HttpMethod.Post, tokenEP);
             requestMessage.Content = reqBody;
             requestMessage.Headers.Add("Authorization", "Basic " + authToken);
-            HttpResponseMessage resp = await _httpClient.SendAsync(requestMessage);
-            string body = await resp.Content.ReadAsStringAsync();
+            HttpResponseMessage resp = await _httpClient.SendAsync(requestMessage).ConfigureAwait(false);
+            string body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
             if (resp.StatusCode != HttpStatusCode.OK)
             {
                 _logger.LogWarning(
@@ -256,6 +314,7 @@ namespace Emby.Server.Implementations.Data
         /// <param name="dispose"><c>true</c> to release both managed and unmanaged resources; <c>false</c> to release only unmanaged resources.</param>
         protected virtual void Dispose(bool dispose)
         {
+            _httpClient.Dispose();
             _backend.Dispose();
         }
 
@@ -287,19 +346,19 @@ namespace Emby.Server.Implementations.Data
         }
 
         private List<(BaseItem Item, ItemCounts ItemCounts)> SpotQuery<T>(User user, string query, Guid? parentId = null)
-            where T : SpotifyData.IJSONToItems
+            where T : IJSONToItems
         {
             var taskSearch = AsyncSpotQuery<T>(user, query, parentId);
             return taskSearch.GetAwaiter().GetResult();
         }
 
         private async Task<List<(BaseItem Item, ItemCounts ItemCounts)>> AsyncSpotQuery<T>(User user, string query, Guid? parentId = null, bool retry = true)
-            where T : SpotifyData.IJSONToItems
+            where T : IJSONToItems
         {
             var requestMessage = new HttpRequestMessage(HttpMethod.Get, query);
             if (user.SpotifyToken is null)
             {
-                user.SpotifyToken = await SpotLogin(user.SpotifyApiKey);
+                user.SpotifyToken = await SpotLogin(user.SpotifyApiKey).ConfigureAwait(false);
             }
 
             if (user.SpotifyToken is null)
@@ -309,14 +368,14 @@ namespace Emby.Server.Implementations.Data
             }
 
             requestMessage.Headers.Add("Authorization", "Bearer " + user.SpotifyToken);
-            HttpResponseMessage resp = await _httpClient.SendAsync(requestMessage);
-            string body = await resp.Content.ReadAsStringAsync();
+            HttpResponseMessage resp = await _httpClient.SendAsync(requestMessage).ConfigureAwait(false);
+            string body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
             if (resp.StatusCode == HttpStatusCode.Unauthorized)
             {
                 user.SpotifyToken = null;
                 if (retry)
                 {
-                    return await AsyncSpotQuery<T>(user, query, parentId, false);
+                    return await AsyncSpotQuery<T>(user, query, parentId, false).ConfigureAwait(false);
                 }
             }
             else if (resp.StatusCode != HttpStatusCode.OK)
@@ -386,7 +445,7 @@ namespace Emby.Server.Implementations.Data
             if (ValidateQueryData(user, artistId) is QueryData qdata)
             {
                 string searchEP = $"{spotAPI}/artists/{UriToId(qdata.Item.ExternalId)}/albums?include_groups=album&limit={limit}&market=FR";
-                var res = SpotQuery<SpotifyData.AlbumList>(qdata.User, searchEP, artistId);
+                var res = SpotQuery<AlbumList>(qdata.User, searchEP, artistId);
                 _logger.LogInformation("Searching spotify for albums by artist {ArtistId} -> {N} results", qdata.Item.ExternalId, res.Count);
                 return res;
             }
@@ -428,7 +487,7 @@ namespace Emby.Server.Implementations.Data
                     // First see if we have the tracks in cache or db
                     var localTracks = folder.LinkedChildren
                         .Where(child => child.ItemId is not null)
-                        .Select(child => SpotifyData.TryRetrieveItem<BaseItem>(this, _memoryCache, (Guid)child.ItemId!))
+                        .Select(child => TryRetrieveItem<BaseItem>(this, _memoryCache, (Guid)child.ItemId!))
                         .Where(item => item is Audio)
                         .Select(item => (item!, new ItemCounts { SongCount = 1 }))
                         .ToList();
@@ -442,7 +501,7 @@ namespace Emby.Server.Implementations.Data
                 _logger.LogInformation("Searching for tracks on album {AName} {AId}", folder.Name, folder.ExternalId);
                 // TODO: don't hardcode market. But where to get it ?
                 string searchEP = $"{spotAPI}/albums/{UriToId(folder.ExternalId)}/tracks?market=FR&limit=50";
-                var res = SpotQuery<SpotifyData.TrackList>(qdata.User, searchEP, albumId);
+                var res = SpotQuery<TrackList>(qdata.User, searchEP, albumId);
                 LinkTracks(folder, res.Select(i => i.Item).ToList());
                 _logger.LogInformation("Searching spotify for track on album {AlbumId} -> {N} results", folder.ExternalId, res.Count);
                 return res;
@@ -457,7 +516,7 @@ namespace Emby.Server.Implementations.Data
             {
                 // TODO: don't hardcode market. But where to get it ?
                 string searchEP = $"{spotAPI}/artists/{UriToId(qdata.Item.ExternalId)}/top-tracks?market=FR";
-                var res = SpotQuery<SpotifyData.TrackList2>(qdata.User, searchEP);
+                var res = SpotQuery<TrackList>(qdata.User, searchEP);
                 _logger.LogInformation("Searching spotify for track by artist {ArtistId} -> {N} results", qdata.Item.ExternalId, res.Count);
                 return res;
             }
@@ -465,7 +524,7 @@ namespace Emby.Server.Implementations.Data
             return new List<(BaseItem, ItemCounts)>();
         }
 
-        private List<(BaseItem Item, ItemCounts ItemCounts)> SearchSpotItem(User? user, string search, string what, int limit, Guid? parentId = null)
+        private List<(BaseItem Item, ItemCounts ItemCounts)> SearchSpotifyItem(User? user, string search, string what, int limit, Guid? parentId = null)
         {
             if (user is null)
             {
@@ -473,14 +532,20 @@ namespace Emby.Server.Implementations.Data
             }
 
             string searchEP = $"https://api.spotify.com/v1/search?q={search}&type={what}&limit={limit}";
-            _logger.LogInformation("SearchSpotItem for {N} {What} matching {Search}", limit, what, search);
-            return SpotQuery<SpotifyData.SearchResponse>(user, searchEP, parentId);
+            _logger.LogInformation("SearchSpotifyItem for {N} {What} matching {Search}", limit, what, search);
+            return SpotQuery<SearchResponse>(user, searchEP, parentId);
         }
 
         /// <inheritdoc/>
         public QueryResult<(BaseItem Item, ItemCounts ItemCounts)> GetArtists(InternalItemsQuery query)
         {
+            if (query.TopParentIds.Length > 0)
+            {
+                query.TopParentIds = query.TopParentIds.Append(_rootFolder.Id).ToArray();
+            }
+
             // First, query the local database.
+            // TODO: order by most played ?
             var results = _backend.GetArtists(query).Items.ToDictionary<(BaseItem, ItemCounts), Guid>(result => result.Item1.Id);
             LogQuery("GetArtists", query, results.Count);
             // Then if we are looking for more results, query spotify.
@@ -488,7 +553,7 @@ namespace Emby.Server.Implementations.Data
             {
                 int duplicates = 0;
                 int count = 0;
-                foreach (var (item, itemCount) in SearchSpotItem(
+                foreach (var (item, itemCount) in SearchSpotifyItem(
                             query.User,
                             query.SearchTerm,
                             "artist",
@@ -560,7 +625,7 @@ namespace Emby.Server.Implementations.Data
             }
         }
 
-        private IReadOnlyList<BaseItem> AddSpotItems(InternalItemsQuery query, IReadOnlyList<BaseItem> db_results)
+        private IReadOnlyList<BaseItem> AddSpotifyItems(InternalItemsQuery query, IReadOnlyList<BaseItem> db_results)
         {
             var itemtypes = query.IncludeItemTypes;
             if (query.Limit is not null && query.Limit < db_results.Count)
@@ -619,7 +684,7 @@ namespace Emby.Server.Implementations.Data
                 {
                     TryAddItems(
                             results,
-                            SearchSpotItem(query.User, query.SearchTerm, "track", query.Limit ?? 25)
+                            SearchSpotifyItem(query.User, query.SearchTerm, "track", query.Limit ?? 25)
                                 .Select(itemAndCount => itemAndCount.Item)
                                 .ToList(),
                             out int count,
@@ -660,7 +725,7 @@ namespace Emby.Server.Implementations.Data
                 {
                     TryAddItems(
                             results,
-                            SearchSpotItem(query.User, query.SearchTerm, "album", query.Limit ?? 25)
+                            SearchSpotifyItem(query.User, query.SearchTerm, "album", query.Limit ?? 25)
                                 .Select(itemAndCount => itemAndCount.Item)
                                 .ToList(),
                             out int count,
@@ -688,12 +753,12 @@ namespace Emby.Server.Implementations.Data
                 _logger.LogInformation("GetItemList got {N} results from DB : {Res}", results.Count, results.Select(r => $"{r.Name}, {r.Id}, {r.ExternalId}"));
             }
             */
-            if (query.Name is null || query.Name == string.Empty)
+            if (query.Name is null || query.Name.Length == 0)
             {
                 LogQuery("GetItemList", query, results.Count);
             }
 
-            return AddSpotItems(query, results).ToList();
+            return AddSpotifyItems(query, results).ToList();
         }
 
         /// <inheritdoc/>
@@ -701,7 +766,7 @@ namespace Emby.Server.Implementations.Data
         {
             QueryResult<BaseItem> results = _backend.GetItems(query);
             LogQuery("GetItems", query, results.TotalRecordCount);
-            return new QueryResult<BaseItem>(AddSpotItems(query, results.Items));
+            return new QueryResult<BaseItem>(AddSpotifyItems(query, results.Items));
         }
 
         /// <inheritdoc/>
@@ -801,7 +866,7 @@ namespace Emby.Server.Implementations.Data
         /// <inheritdoc/>
         public void SaveItems(IReadOnlyList<BaseItem> items, CancellationToken cancellationToken)
         {
-            if (items.First().ExternalId == string.Empty || items.First().ExternalId is null)
+            if (items.Count > 0 && (items[0].ExternalId is null || items[0].ExternalId.Length == 0))
             {
                 _logger.LogInformation("SaveItems : {Items}, {Stack}", items.Select(i => $"{i.Name}, {i.Id}, {i.ExternalId}"));
             }

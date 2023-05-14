@@ -3,7 +3,7 @@ using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Providers;
 
-namespace Emby.Server.Implementations.Data
+namespace Spotify.Data
 {
     /// <summary>
     /// Spotify album external id.

@@ -104,6 +104,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Prometheus.DotNetRuntime;
+using Spotify.Data;
 using static MediaBrowser.Controller.Extensions.ConfigurationExtensions;
 using WebSocketManager = Emby.Server.Implementations.HttpServer.WebSocketManager;
 
@@ -537,7 +538,7 @@ namespace Emby.Server.Implementations
             serviceCollection.AddSingleton<IUserDataManager, UserDataManager>();
 
             // serviceCollection.AddSingleton<IItemRepository, SqliteItemRepository>();
-            serviceCollection.AddSingleton<IItemRepository, SpotItemRepository>();
+            serviceCollection.AddSingleton<IItemRepository, SpotifyItemRepository>();
 
             serviceCollection.AddSingleton<IMediaEncoder, MediaBrowser.MediaEncoding.Encoder.MediaEncoder>();
             serviceCollection.AddSingleton<EncodingHelper>();
@@ -636,7 +637,9 @@ namespace Emby.Server.Implementations
             SetStaticProperties();
 
             var userDataRepo = (SqliteUserDataRepository)Resolve<IUserDataRepository>();
-            ((SpotItemRepository)Resolve<IItemRepository>()).Initialize(userDataRepo, Resolve<IUserManager>());
+            var backingDataRepo = (SqliteItemRepository)CreateInstanceSafe(typeof(SqliteItemRepository));
+            backingDataRepo.Initialize(userDataRepo, Resolve<IUserManager>());
+            ((SpotifyItemRepository)Resolve<IItemRepository>()).Initialize(backingDataRepo, Resolve<IUserManager>());
 
             FindParts();
         }
@@ -934,6 +937,9 @@ namespace Emby.Server.Implementations
 
             // Hls
             yield return typeof(DynamicHlsPlaylistGenerator).Assembly;
+
+            // Spotify
+            yield return typeof(SpotifyItemRepository).Assembly;
 
             foreach (var i in GetAssembliesWithPartsInternal())
             {

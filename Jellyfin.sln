@@ -93,6 +93,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Jellyfin.MediaEncoding.Hls.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Jellyfin.MediaEncoding.Keyframes.Tests", "tests\Jellyfin.MediaEncoding.Keyframes.Tests\Jellyfin.MediaEncoding.Keyframes.Tests.csproj", "{24960660-DE6C-47BF-AEEF-CEE8F19FE6C2}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Spotify", "Spotify\Spotify.csproj", "{5E6BD26D-EB11-45BE-BD5E-91E1F9CF5136}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -251,6 +253,10 @@ Global
 		{24960660-DE6C-47BF-AEEF-CEE8F19FE6C2}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{24960660-DE6C-47BF-AEEF-CEE8F19FE6C2}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{24960660-DE6C-47BF-AEEF-CEE8F19FE6C2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5E6BD26D-EB11-45BE-BD5E-91E1F9CF5136}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5E6BD26D-EB11-45BE-BD5E-91E1F9CF5136}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5E6BD26D-EB11-45BE-BD5E-91E1F9CF5136}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5E6BD26D-EB11-45BE-BD5E-91E1F9CF5136}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
