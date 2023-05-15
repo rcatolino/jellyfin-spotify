@@ -418,7 +418,7 @@ namespace Spotify.Data
             _memoryCache.TryGetValue(itemId, out BaseItem? item);
             if (item is null || item.ExternalId is null || !item.ExternalId.StartsWith("spotify", StringComparison.InvariantCulture))
             {
-                _logger.LogInformation("Spotify album tracks lookup : Album {Guid} is not in cache or doesn't come from spotify", itemId);
+                _logger.LogInformation("Spotify lookup by id : Item {Guid} is not in cache or doesn't come from spotify", itemId);
                 return null;
             }
 
@@ -479,31 +479,31 @@ namespace Spotify.Data
 
         private List<(BaseItem Item, ItemCounts ItemCounts)> AlbumTracks(User? user, Guid albumId)
         {
-            if (ValidateQueryData(user, albumId) is QueryData qdata && qdata.Item is Folder folder)
+            if (ValidateQueryData(user, albumId) is QueryData qdata && qdata.Item is MusicAlbum album)
             {
-                _logger.LogInformation("Album {AName} already has {C} linked tracks", folder.Name, folder.LinkedChildren.Length);
-                if (folder.LinkedChildren.Length > 0)
+                _logger.LogInformation("Album {AName} already has {C} linked tracks", album.Name, album.LinkedChildren.Length);
+                if (album.LinkedChildren.Length > 0)
                 {
                     // First see if we have the tracks in cache or db
-                    var localTracks = folder.LinkedChildren
+                    var localTracks = album.LinkedChildren
                         .Where(child => child.ItemId is not null)
                         .Select(child => TryRetrieveItem<BaseItem>(this, _memoryCache, (Guid)child.ItemId!))
                         .Where(item => item is Audio)
                         .Select(item => (item!, new ItemCounts { SongCount = 1 }))
                         .ToList();
-                    if (localTracks.Count == folder.LinkedChildren.Length)
+                    if (localTracks.Count == album.LinkedChildren.Length)
                     {
                         _logger.LogInformation("All {C} linked tracks for album {AName} are still in cache or db, not querying spotify", localTracks.Count);
                         return localTracks;
                     }
                 }
 
-                _logger.LogInformation("Searching for tracks on album {AName} {AId}", folder.Name, folder.ExternalId);
+                _logger.LogInformation("Searching for tracks on album {AName} {AId}", album.Name, album.ExternalId);
                 // TODO: don't hardcode market. But where to get it ?
-                string searchEP = $"{spotAPI}/albums/{UriToId(folder.ExternalId)}/tracks?market=FR&limit=50";
+                string searchEP = $"{spotAPI}/albums/{UriToId(album.ExternalId)}/tracks?market=FR&limit=50";
                 var res = SpotQuery<TrackList>(qdata.User, searchEP, albumId);
-                LinkTracks(folder, res.Select(i => i.Item).ToList());
-                _logger.LogInformation("Searching spotify for track on album {AlbumId} -> {N} results", folder.ExternalId, res.Count);
+                LinkTracks(album, res.Select(i => i.Item).ToList());
+                _logger.LogInformation("Searching spotify for track on album {AlbumId} -> {N} results", album.ExternalId, res.Count);
                 return res;
             }
 

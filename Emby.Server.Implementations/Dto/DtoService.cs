@@ -930,100 +930,86 @@ namespace Emby.Server.Implementations.Dto
             {
                 dto.Artists = hasArtist.Artists;
 
-                // var artistItems = _libraryManager.GetArtists(new InternalItemsQuery
-                // {
-                //    EnableTotalRecordCount = false,
-                //    ItemIds = new[] { item.Id.ToString("N", CultureInfo.InvariantCulture) }
-                // });
-
-                // dto.ArtistItems = artistItems.Items
-                //    .Select(i =>
-                //    {
-                //        var artist = i.Item1;
-                //        return new NameIdPair
-                //        {
-                //            Name = artist.Name,
-                //            Id = artist.Id.ToString("N", CultureInfo.InvariantCulture)
-                //        };
-                //    })
-                //    .ToList();
+                var artists = new Dictionary<string, Guid>();
+                if (!item.ParentId.Equals(Guid.Empty))
+                {
+                    if (_libraryManager.GetItemById(item.ParentId) is MusicArtist artist && artist is not null)
+                    {
+                        artists.Add(artist.Name, artist.Id);
+                    }
+                }
 
                 // Include artists that are not in the database yet, e.g., just added via metadata editor
-                // var foundArtists = artistItems.Items.Select(i => i.Item1.Name).ToList();
-                dto.ArtistItems = hasArtist.Artists
-                    // .Except(foundArtists, new DistinctNameComparer())
-                    .Select(i =>
+                foreach (var i in hasArtist.Artists)
+                {
+                   // This should not be necessary but we're seeing some cases of it
+                   if (string.IsNullOrEmpty(i))
+                   {
+                       continue;
+                   }
+
+                   // Get artists items with the same name.
+                   // TODO: If the library has different artists with the same name, the wrong artist could very well be selected here.
+                   // Ideally IHasAlbumArtist would list artists guid, not artists names
+                   var artist = _libraryManager.GetArtist(i, new DtoOptions(false)
+                   {
+                       EnableImages = false
+                   });
+                   if (artist is not null)
+                   {
+                       // Add, but only if we don't already have an artist with the same name
+                       artists.TryAdd(artist.Name, artist.Id);
+                   }
+               }
+
+                dto.ArtistItems = artists.Select(i => new NameGuidPair()
                     {
-                        // This should not be necessary but we're seeing some cases of it
-                        if (string.IsNullOrEmpty(i))
-                        {
-                            return null;
-                        }
-
-                        var artist = _libraryManager.GetArtist(i, new DtoOptions(false)
-                        {
-                            EnableImages = false
-                        });
-                        if (artist is not null)
-                        {
-                            return new NameGuidPair
-                            {
-                                Name = artist.Name,
-                                Id = artist.Id
-                            };
-                        }
-
-                        return null;
-                    }).Where(i => i is not null).ToArray();
+                        Name = i.Key,
+                        Id = i.Value,
+                    }).ToArray();
             }
 
             if (item is IHasAlbumArtist hasAlbumArtist)
             {
                 dto.AlbumArtist = hasAlbumArtist.AlbumArtists.FirstOrDefault();
 
-                // var artistItems = _libraryManager.GetAlbumArtists(new InternalItemsQuery
-                // {
-                //    EnableTotalRecordCount = false,
-                //    ItemIds = new[] { item.Id.ToString("N", CultureInfo.InvariantCulture) }
-                // });
-
-                // dto.AlbumArtists = artistItems.Items
-                //    .Select(i =>
-                //    {
-                //        var artist = i.Item1;
-                //        return new NameIdPair
-                //        {
-                //            Name = artist.Name,
-                //            Id = artist.Id.ToString("N", CultureInfo.InvariantCulture)
-                //        };
-                //    })
-                //    .ToList();
-
-                dto.AlbumArtists = hasAlbumArtist.AlbumArtists
-                    // .Except(foundArtists, new DistinctNameComparer())
-                    .Select(i =>
+                // Check if parent is a MusicArtist
+                var albumArtists = new Dictionary<string, Guid>();
+                if (!item.ParentId.Equals(Guid.Empty))
+                {
+                    if (_libraryManager.GetItemById(item.ParentId) is MusicArtist artist && artist is not null)
                     {
-                        // This should not be necessary but we're seeing some cases of it
-                        if (string.IsNullOrEmpty(i))
-                        {
-                            return null;
-                        }
+                        albumArtists.Add(artist.Name, artist.Id);
+                    }
+                }
 
-                        var artist = _libraryManager.GetArtist(i, new DtoOptions(false)
-                        {
-                            EnableImages = false
-                        });
-                        if (artist is not null)
-                        {
-                            return new NameGuidPair
-                            {
-                                Name = artist.Name,
-                                Id = artist.Id
-                            };
-                        }
+                foreach (var i in hasAlbumArtist.AlbumArtists)
+                {
+                   // This should not be necessary but we're seeing some cases of it
+                   if (string.IsNullOrEmpty(i))
+                   {
+                       continue;
+                   }
 
-                        return null;
-                    }).Where(i => i is not null).ToArray();
+                   // Get artists items with the same name.
+                   // TODO: If the library has different artists with the same name, the wrong artist could very well be selected here.
+                   // Ideally IHasAlbumArtist would list artists guid, not artists names
+                   var artist = _libraryManager.GetArtist(i, new DtoOptions(false)
+                   {
+                       EnableImages = false
+                   });
+                   if (artist is not null)
+                   {
+                       // Add, but only if we don't already have an artist with the same name
+                       albumArtists.TryAdd(artist.Name, artist.Id);
+                   }
+               }
+
+                dto.AlbumArtists = albumArtists.Select(i => new NameGuidPair()
+                    {
+                        Name = i.Key,
+                        Id = i.Value,
+                    }).ToArray();
             }
 
             // Add video info
