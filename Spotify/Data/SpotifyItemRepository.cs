@@ -380,7 +380,7 @@ namespace Spotify.Data
             }
             else if (resp.StatusCode != HttpStatusCode.OK)
             {
-                _logger.LogWarning("Spotify search failed with code {Code} : {Text}", resp.StatusCode, body);
+                _logger.LogWarning("Spotify search {Query} failed with code {Code} : {Text}", query, resp.StatusCode, body);
             }
 
             try
@@ -513,7 +513,7 @@ namespace Spotify.Data
         {
             if (ValidateQueryData(user, artistId) is QueryData qdata)
             {
-                string searchEP = $"{spotAPI}/artists/{UriToId(qdata.Item.ExternalId)}/top-tracks?market{qdata.User.SpotifyMarket}";
+                string searchEP = $"{spotAPI}/artists/{UriToId(qdata.Item.ExternalId)}/top-tracks?market={qdata.User.SpotifyMarket}";
                 var res = SpotQuery<TrackList>(qdata.User, searchEP);
                 _logger.LogInformation("Searching spotify for track by artist {ArtistId} -> {N} results", qdata.Item.ExternalId, res.Count);
                 return res;
