@@ -444,7 +444,7 @@ namespace Spotify.Data
         {
             if (ValidateQueryData(user, artistId) is QueryData qdata)
             {
-                string searchEP = $"{spotAPI}/artists/{UriToId(qdata.Item.ExternalId)}/albums?include_groups=album&limit={limit}&market=FR";
+                string searchEP = $"{spotAPI}/artists/{UriToId(qdata.Item.ExternalId)}/albums?include_groups=album&limit={limit}&market={qdata.User.SpotifyMarket}";
                 var res = SpotQuery<AlbumList>(qdata.User, searchEP, artistId);
                 _logger.LogInformation("Searching spotify for albums by artist {ArtistId} -> {N} results", qdata.Item.ExternalId, res.Count);
                 return res;
@@ -499,8 +499,7 @@ namespace Spotify.Data
                 }
 
                 _logger.LogInformation("Searching for tracks on album {AName} {AId}", album.Name, album.ExternalId);
-                // TODO: don't hardcode market. But where to get it ?
-                string searchEP = $"{spotAPI}/albums/{UriToId(album.ExternalId)}/tracks?market=FR&limit=50";
+                string searchEP = $"{spotAPI}/albums/{UriToId(album.ExternalId)}/tracks?market={qdata.User.SpotifyMarket}&limit=50";
                 var res = SpotQuery<TrackList>(qdata.User, searchEP, albumId);
                 LinkTracks(album, res.Select(i => i.Item).ToList());
                 _logger.LogInformation("Searching spotify for track on album {AlbumId} -> {N} results", album.ExternalId, res.Count);
@@ -514,8 +513,7 @@ namespace Spotify.Data
         {
             if (ValidateQueryData(user, artistId) is QueryData qdata)
             {
-                // TODO: don't hardcode market. But where to get it ?
-                string searchEP = $"{spotAPI}/artists/{UriToId(qdata.Item.ExternalId)}/top-tracks?market=FR";
+                string searchEP = $"{spotAPI}/artists/{UriToId(qdata.Item.ExternalId)}/top-tracks?market{qdata.User.SpotifyMarket}";
                 var res = SpotQuery<TrackList>(qdata.User, searchEP);
                 _logger.LogInformation("Searching spotify for track by artist {ArtistId} -> {N} results", qdata.Item.ExternalId, res.Count);
                 return res;
@@ -545,7 +543,6 @@ namespace Spotify.Data
             }
 
             // First, query the local database.
-            // TODO: order by most played ?
             var results = _backend.GetArtists(query).Items.ToDictionary<(BaseItem, ItemCounts), Guid>(result => result.Item1.Id);
             LogQuery("GetArtists", query, results.Count);
             // Then if we are looking for more results, query spotify.

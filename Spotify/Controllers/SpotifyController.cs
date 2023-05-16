@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Web;
 using Jellyfin.Api;
 using Jellyfin.Api.Extensions;
+using Jellyfin.Data.Entities;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
@@ -304,7 +305,23 @@ namespace Spotify.Controllers
             var jsonBody = JsonDocument.Parse(body);
             user.SpotifyWPToken = jsonBody.RootElement.GetProperty("access_token").GetString();
             user.SpotifyRefreshToken = jsonBody.RootElement.GetProperty("refresh_token").GetString();
-            return Redirect("/web/index.html"); // TODO: redirect at previous location
+            _ = UpdateUserCountry(user); // Don't wait for the country to be updated to continue
+            return Redirect("/web/index.html");
+        }
+
+        private async Task UpdateUserCountry(User user)
+        {
+            var requestMessage = new HttpRequestMessage(HttpMethod.Get, "https://api.spotify.com/v1/me");
+            requestMessage.Headers.Add("Authorization", "Bearer " + user.SpotifyWPToken);
+            var resp = await _httpClient.SendAsync(requestMessage).ConfigureAwait(true);
+            string body = await resp.Content.ReadAsStringAsync().ConfigureAwait(true);
+            if (resp.StatusCode != HttpStatusCode.OK)
+            {
+                _logger.LogWarning("Failed to get user's spotify account, code {Code} : {Text}", resp.StatusCode, body);
+                return;
+            }
+
+            user.SpotifyMarket = JsonDocument.Parse(body).RootElement.GetProperty("country").GetString();
         }
     }
 }

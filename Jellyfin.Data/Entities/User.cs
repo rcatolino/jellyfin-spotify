@@ -83,6 +83,11 @@ namespace Jellyfin.Data.Entities
         public string? SpotifyRefreshToken { get; set; }
 
         /// <summary>
+        /// Gets or sets session spotify refresh token for the user (web playback api).
+        /// </summary>
+        public string? SpotifyMarket { get; set; }
+
+        /// <summary>
         /// Gets or sets the Id of the user.
         /// </summary>
         /// <remarks>
