@@ -109,13 +109,13 @@ namespace Spotify.Controllers
             user.SpotifyWPToken = jsonBody.RootElement.GetProperty("access_token").GetString();
             if (user.SpotifyWPToken is null)
             {
-                _logger.LogWarning("Spotify refreshed access token without error but the new access_token is missing the server response");
+                _logger.LogWarning("Spotify refreshed access token without error but the new access_token is missing from the server response");
                 return NotFound("Spotify API error");
             }
 
             if (jsonBody.RootElement.TryGetProperty("refresh_token", out var newRefresh))
             {
-                user.SpotifyWPToken = newRefresh.GetString();
+                user.SpotifyRefreshToken = newRefresh.GetString();
             }
 
             return Ok(new SpotifyAuthDataDto { AccessToken = user.SpotifyWPToken });
