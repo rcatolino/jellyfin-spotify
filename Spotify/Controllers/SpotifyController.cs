@@ -131,7 +131,7 @@ namespace Spotify.Controllers
             _logger.LogInformation("Spotify Login Prep, setting state {S} for user {U}", state, userId);
             _memoryCache.Set(state, userId, new TimeSpan(0, 5, 0)); // We need to save the state somewhere for the verification in SpotifyAuthCallback
             var redirect = HttpUtility.UrlEncode($"http://localhost:8096/Spotify/AuthCallback");
-            var scopes = HttpUtility.UrlEncode("streaming user-read-email user-read-private user-modify-playback-state");
+            var scopes = HttpUtility.UrlEncode("streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state");
             var url = $"client_id={clientId}&response_type=code&redirect_uri={redirect}&state={HttpUtility.UrlEncode(state)}&scope={scopes}";
             return Ok(new SpotifyAuthDataDto { RedirectURL = $"https://accounts.spotify.com/authorize?{url}" });
         }
