@@ -50,7 +50,6 @@ namespace Spotify.Controllers
             _logger = logger;
             _memoryCache = memoryCache;
             _httpClient = httpClientFactory.CreateClient(NamedClient.Default);
-            logger.LogInformation("Loading LibraryController");
         }
 
         /// <summary>
@@ -130,8 +129,9 @@ namespace Spotify.Controllers
             var clientId = apiKey.Split(':')[0];
             _logger.LogInformation("Spotify Login Prep, setting state {S} for user {U}", state, userId);
             _memoryCache.Set(state, userId, new TimeSpan(0, 5, 0)); // We need to save the state somewhere for the verification in SpotifyAuthCallback
-            var redirect = HttpUtility.UrlEncode($"http://localhost:8096/Spotify/AuthCallback");
-            var scopes = HttpUtility.UrlEncode("streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state");
+            var currentReq = HttpContext.Request;
+            var redirect = HttpUtility.UrlEncode($"{currentReq.Scheme}://{currentReq.Host}/Spotify/AuthCallback");
+            var scopes = HttpUtility.UrlEncode("streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state user-library-read");
             var url = $"client_id={clientId}&response_type=code&redirect_uri={redirect}&state={HttpUtility.UrlEncode(state)}&scope={scopes}";
             return Ok(new SpotifyAuthDataDto { RedirectURL = $"https://accounts.spotify.com/authorize?{url}" });
         }
@@ -285,11 +285,12 @@ namespace Spotify.Controllers
             }
 
             string authToken = Convert.ToBase64String(Encoding.UTF8.GetBytes(user.SpotifyApiKey));
+            var currentReq = HttpContext.Request;
             var form = new Dictionary<string, string>
             {
                 { "grant_type", "authorization_code" },
                 { "code", code },
-                { "redirect_uri", $"http://localhost:8096/Spotify/AuthCallback" },
+                { "redirect_uri", $"{currentReq.Scheme}://{currentReq.Host}/Spotify/AuthCallback" },
             };
             var requestMessage = new HttpRequestMessage(HttpMethod.Post, "https://accounts.spotify.com/api/token");
             requestMessage.Content = new FormUrlEncodedContent(form);
