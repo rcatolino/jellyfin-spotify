@@ -21,6 +21,11 @@ namespace Spotify.Data
         public SpotifyArtist[] Artists { get; set; }
 
         /// <summary>
+        /// Gets or sets the Spotify Album.
+        /// </summary>
+        public SpotifyAlbum Album { get; set; }
+
+        /// <summary>
         /// Gets or sets the duration (in ms).
         /// </summary>
         [JsonRequired]
@@ -56,6 +61,13 @@ namespace Spotify.Data
                 track.ParentIndexNumber = DiscNumber;
                 track.RunTimeTicks = DurationMs * 10000;
                 track.Artists = Artists.Select(a => a.Name).ToList();
+
+                if (parentId is null && Album is not null)
+                {
+                    var album = Album.ToItem(logger, memoryCache, itemRepository, null, ownerId);
+                    track.ParentId = album.Id;
+                }
+
                 foreach (var artist in Artists)
                 {
                     artist.ToItem(logger, memoryCache, itemRepository, null, ownerId);

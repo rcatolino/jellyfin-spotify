@@ -29,6 +29,7 @@ namespace Spotify.Data
         private readonly IMemoryCache _memoryCache;
         private readonly IUserManager _userManager;
         private readonly string spotAPI = "https://api.spotify.com/v1";
+        private readonly IUserDataManager _userDataRepository;
         private IItemRepository _backend;
         private ILogger<SpotifyItemRepository> _logger;
         private HttpClient _httpClient;
@@ -45,6 +46,7 @@ namespace Spotify.Data
         /// <param name="localization">Instance of the <see cref="ILocalizationManager"/> interface.</param>
         /// <param name="imageProcessor">Instance of the <see cref="ILibraryManager"/> interface.</param>
         /// <param name="httpClientFactory">The <see cref="IHttpClientFactory"/>.</param>
+        /// <param name="userDataRepository">Instance of the <see cref="IUserDataManager"/> interface.</param>
         public SpotifyItemRepository(
             IServerConfigurationManager config,
             IServerApplicationHost appHost,
@@ -53,6 +55,7 @@ namespace Spotify.Data
             IImageProcessor imageProcessor,
             IMemoryCache memoryCache,
             IUserManager userManager,
+            IUserDataManager userDataRepository,
             IHttpClientFactory httpClientFactory)
         {
             _logger = logger;
@@ -61,6 +64,7 @@ namespace Spotify.Data
             _userManager = userManager;
             _httpClient = httpClientFactory.CreateClient(NamedClient.Default);
             _rootFolder = null!;
+            _userDataRepository = userDataRepository;
         }
 
         /// <summary>
@@ -352,30 +356,52 @@ namespace Spotify.Data
             return taskSearch.GetAwaiter().GetResult();
         }
 
-        private async Task<List<(BaseItem Item, ItemCounts ItemCounts)>> AsyncSpotQuery<T>(User user, string query, Guid? parentId = null, bool retry = true)
+        private async Task<List<(BaseItem Item, ItemCounts ItemCounts)>> AsyncSpotQuery<T>(User user, string query, Guid? parentId = null, bool retry = true, bool forceClientCreds = false)
             where T : IJSONToItems
         {
             var requestMessage = new HttpRequestMessage(HttpMethod.Get, query);
-            if (user.SpotifyToken is null)
+            string? token = null;
+            if (user.SpotifyWPToken is not null && !forceClientCreds)
             {
-                user.SpotifyToken = await SpotLogin(user.SpotifyApiKey).ConfigureAwait(false);
+                // Try to use the oauth web token first as it has more rights than the client-credentials one
+                token = user.SpotifyWPToken;
+            }
+            else if (user.SpotifyToken is not null)
+            {
+                // We have no oauth web token, and we can't start an oauth request from this context, use the client credentials
+                token = user.SpotifyToken;
             }
 
-            if (user.SpotifyToken is null)
+            if (token is null)
             {
-                _logger.LogWarning("Connection to spotify failed");
-                return new List<(BaseItem, ItemCounts)>();
+                token = await SpotLogin(user.SpotifyApiKey).ConfigureAwait(false);
+                if (token is null)
+                {
+                    // Login failed with the client credentials, bail out
+                    _logger.LogWarning("Connection to spotify failed");
+                    return new List<(BaseItem, ItemCounts)>();
+                }
             }
 
-            requestMessage.Headers.Add("Authorization", "Bearer " + user.SpotifyToken);
+            requestMessage.Headers.Add("Authorization", "Bearer " + token);
             HttpResponseMessage resp = await _httpClient.SendAsync(requestMessage).ConfigureAwait(false);
             string body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
             if (resp.StatusCode == HttpStatusCode.Unauthorized)
             {
-                user.SpotifyToken = null;
+                if (token == user.SpotifyToken)
+                {
+                    // We tried to use the client credentials and it didn't work. Invalidate it and retry.
+                    user.SpotifyToken = null;
+                }
+                else
+                {
+                    // TODO: We should try to refresh the web token if we can, and retry
+                    // But for now only retry with the client creds
+                }
+
                 if (retry)
                 {
-                    return await AsyncSpotQuery<T>(user, query, parentId, false).ConfigureAwait(false);
+                    return await AsyncSpotQuery<T>(user, query, parentId, false, true).ConfigureAwait(false);
                 }
             }
             else if (resp.StatusCode != HttpStatusCode.OK)
@@ -522,6 +548,38 @@ namespace Spotify.Data
             return new List<(BaseItem, ItemCounts)>();
         }
 
+        private void MarkFavorite(User user, BaseItem item)
+        {
+            var data = _userDataRepository.GetUserData(user, item);
+            if (!data.IsFavorite)
+            {
+                data.IsFavorite = true;
+                _logger.LogInformation("Marking Item {I} from spotify as favorite", item.Name);
+                _userDataRepository.SaveUserData(user, item, data, UserDataSaveReason.UpdateUserRating, CancellationToken.None);
+            }
+        }
+
+        private List<(BaseItem Item, ItemCounts ItemCounts)> SpotifyFavorites(User? user, int limit, int offset = 0)
+        {
+            if (user is null)
+            {
+                return new List<(BaseItem, ItemCounts)>();
+            }
+
+            if (limit > 50)
+            {
+                limit = 50;
+            }
+
+            string searchEP = $"https://api.spotify.com/v1/me/tracks?limit={limit}&offset={offset}&market={user.SpotifyMarket}";
+            _logger.LogInformation("SearchSpotifyItem for {N} favorites from offset {O}", limit, offset);
+            return SpotQuery<FavTrackList>(user, searchEP).Select(i =>
+                {
+                    MarkFavorite(user, i.Item);
+                    return (i.Item, i.ItemCounts);
+                }).ToList();
+        }
+
         private List<(BaseItem Item, ItemCounts ItemCounts)> SearchSpotifyItem(User? user, string search, string what, int limit, Guid? parentId = null)
         {
             if (user is null)
@@ -625,7 +683,7 @@ namespace Spotify.Data
         private IReadOnlyList<BaseItem> AddSpotifyItems(InternalItemsQuery query, IReadOnlyList<BaseItem> db_results)
         {
             var itemtypes = query.IncludeItemTypes;
-            if (query.Limit is not null && query.Limit < db_results.Count)
+            if (query.Limit is not null && query.Limit <= db_results.Count)
             {
                 return db_results;
             }
@@ -688,6 +746,32 @@ namespace Spotify.Data
                             out int duplicates);
                     _logger.LogInformation("Query Audio Items from stpotify matching {Search} -> {N} results, {D} duplicates", query.SearchTerm, count, duplicates);
                 }
+
+                if (query.IsFavorite ?? false)
+                {
+                    int offset = 0;
+                    int totalDup = 0;
+                    int limit = query.Limit ?? 20;
+                    while (results.Count < limit)
+                    {
+                        TryAddItems(
+                                results,
+                                SpotifyFavorites(query.User, Math.Min(50, limit), offset)
+                                    .Select(itemAndCount => itemAndCount.Item)
+                                    .ToList(),
+                                out int count,
+                                out int duplicates);
+                        offset += count;
+                        totalDup += duplicates;
+                        if (count == 0)
+                        {
+                            // No more results from spotify
+                            break;
+                        }
+                    }
+
+                    _logger.LogInformation("Query Favorite Audio Items from stpotify -> {N} results, {D} duplicates", offset, totalDup);
+                }
             }
 
             if (itemtypes.Contains(BaseItemKind.MusicAlbum))
@@ -731,7 +815,11 @@ namespace Spotify.Data
                 }
             }
 
-            // var output = results.SelectMany(list => list).ToList().ToDictionary<BaseItem, Guid>(result => result.Id);
+            if (query.Limit is not null && query.Limit > 0)
+            {
+                return results.Values.Take((int)query.Limit).ToArray();
+            }
+
             return results.Values.ToArray();
         }
 
@@ -761,6 +849,11 @@ namespace Spotify.Data
         /// <inheritdoc/>
         public QueryResult<BaseItem> GetItems(InternalItemsQuery query)
         {
+            if (query.TopParentIds.Length > 0)
+            {
+                query.TopParentIds = query.TopParentIds.Append(_rootFolder.Id).ToArray();
+            }
+
             QueryResult<BaseItem> results = _backend.GetItems(query);
             LogQuery("GetItems", query, results.TotalRecordCount);
             return new QueryResult<BaseItem>(AddSpotifyItems(query, results.Items));
@@ -863,9 +956,9 @@ namespace Spotify.Data
         /// <inheritdoc/>
         public void SaveItems(IReadOnlyList<BaseItem> items, CancellationToken cancellationToken)
         {
-            if (items.Count > 0 && (items[0].ExternalId is null || items[0].ExternalId.Length == 0))
+            if (items.Count > 0)
             {
-                _logger.LogInformation("SaveItems : {Items}, {Stack}", items.Select(i => $"{i.Name}, {i.Id}, {i.ExternalId}"));
+                _logger.LogInformation("SaveItems : {Items}", items.Select(i => $"{i.Name}, id {i.Id}, external id {i.ExternalId} keys {i.GetUserDataKeys().FirstOrDefault()}"));
             }
 
             _backend.SaveItems(items, cancellationToken);

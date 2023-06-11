@@ -2804,6 +2804,7 @@ namespace Emby.Server.Implementations.Data
                 itemQuery = commandTextBuilder.ToString();
             }
 
+            // Logger.LogInformation("GetItems query : {Q}", itemQuery);
             if (query.EnableTotalRecordCount)
             {
                 commandTextBuilder.Clear();

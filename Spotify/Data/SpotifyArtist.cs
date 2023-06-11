@@ -20,6 +20,12 @@ namespace Spotify.Data
             {
                 // This artist doesn't exist in the database yet, create it and save it.
                 artist = new MusicArtist();
+                if (parentId is null)
+                {
+                    // Artists should always be anchored to the virtual spotify root folder
+                    parentId = SpotifyRootFolder.GetOrCreate(itemRepository, memoryCache).Id;
+                }
+
                 BaseToItem(artist, parentId, ownerId);
                 artist.ExternalId = $"spotify:artist:{Id}";
                 itemRepository.SaveItems(new MusicArtist[] { artist }, CancellationToken.None);
