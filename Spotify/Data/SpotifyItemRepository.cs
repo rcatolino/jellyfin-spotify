@@ -856,7 +856,22 @@ namespace Spotify.Data
 
             QueryResult<BaseItem> results = _backend.GetItems(query);
             LogQuery("GetItems", query, results.TotalRecordCount);
-            return new QueryResult<BaseItem>(AddSpotifyItems(query, results.Items));
+            var resultsSpot = new QueryResult<BaseItem>(AddSpotifyItems(query, results.Items));
+            // Fix TotalRecordCount and StartIndex
+            resultsSpot.StartIndex = results.StartIndex;
+            resultsSpot.TotalRecordCount = results.TotalRecordCount + (resultsSpot.Items.Count - results.Items.Count);
+
+            if (query.Limit is not null && query.StartIndex is not null && resultsSpot.Items.Count >= query.Limit)
+            {
+                _logger.LogInformation("GetItems query limit {L}, total item count {C}", resultsSpot.Items.Count, query.Limit);
+                if (resultsSpot.Items.Count >= query.Limit)
+                {
+                    // There are probably more spotify results available, let's raise the total record count by some arbitrary amount to allow the user to query more results
+                    resultsSpot.TotalRecordCount += (int)(query.Limit - query.StartIndex);
+                }
+            }
+
+            return resultsSpot;
         }
 
         /// <inheritdoc/>
